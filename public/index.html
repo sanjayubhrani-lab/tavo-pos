@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PlatePoint POS</title>
+<script src="https://js.stripe.com/v3/"></script>
+<style>
+  :root{--bg:#0f1115;--panel:#171a21;--panel2:#1e222b;--line:#2a2f3a;--txt:#e8ebf0;--mut:#9aa3b2;
+    --brand:#ff5722;--brand2:#ff7a45;--green:#27c281;--red:#ef4d5a;--amber:#f5b042;--blue:#4d8df5;--radius:14px;--shadow:0 8px 30px rgba(0,0,0,.35)}
+  *{box-sizing:border-box}html,body{margin:0;height:100%}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--txt);overflow:hidden}
+  button{font-family:inherit;cursor:pointer;border:none;color:inherit}
+  ::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:#333a47;border-radius:8px}
+  #app{display:flex;height:100vh}
+  .sidebar{width:84px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:14px 0;gap:6px;flex-shrink:0}
+  .logo{width:46px;height:46px;border-radius:12px;background:linear-gradient(135deg,var(--brand),var(--brand2));display:flex;align-items:center;justify-content:center;font-weight:800;font-size:20px;margin-bottom:10px;color:#fff}
+  .nav{display:flex;flex-direction:column;gap:4px;width:100%;align-items:center;flex:1}
+  .navbtn{width:64px;height:60px;border-radius:12px;background:transparent;color:var(--mut);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-size:10px;font-weight:600;transition:.15s}
+  .navbtn .ic{font-size:20px}.navbtn:hover{background:var(--panel2);color:var(--txt)}.navbtn.active{background:var(--brand);color:#fff}
+  .main{flex:1;display:flex;flex-direction:column;min-width:0}
+  .topbar{height:58px;border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 18px;gap:14px;background:var(--panel);flex-shrink:0}
+  .topbar h1{font-size:16px;margin:0}.topbar .sub{color:var(--mut);font-size:12px}.spacer{flex:1}
+  .pill{background:var(--panel2);border:1px solid var(--line);padding:6px 12px;border-radius:20px;font-size:12px;color:var(--mut)}.pill b{color:var(--txt)}
+  .view{flex:1;overflow:auto;padding:18px}
+  .pos{display:grid;grid-template-columns:1fr 380px;gap:16px;height:100%}
+  .menuwrap{display:flex;flex-direction:column;min-height:0}
+  .cats{display:flex;gap:8px;overflow-x:auto;padding-bottom:12px;flex-shrink:0}
+  .cat{padding:9px 16px;border-radius:30px;background:var(--panel2);border:1px solid var(--line);font-size:13px;font-weight:600;white-space:nowrap;color:var(--mut)}
+  .cat.active{background:var(--brand);border-color:var(--brand);color:#fff}
+  .items{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px;overflow:auto;align-content:start}
+  .item{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px;min-height:104px;display:flex;flex-direction:column;justify-content:space-between;text-align:left;transition:.12s}
+  .item:hover{border-color:var(--brand);transform:translateY(-2px)}.item .emoji{font-size:26px}
+  .item .nm{font-size:13px;font-weight:600;margin-top:6px;line-height:1.2}.item .pr{color:var(--green);font-weight:700;font-size:14px;margin-top:4px}
+  .check{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);display:flex;flex-direction:column;min-height:0}
+  .check .hd{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between}.check .hd h3{margin:0;font-size:15px}
+  .check .lines{flex:1;overflow:auto;padding:8px 10px}
+  .empty{color:var(--mut);text-align:center;padding:40px 10px;font-size:13px}
+  .line{display:flex;gap:10px;padding:9px 8px;border-radius:10px;align-items:flex-start}.line:hover{background:var(--panel2)}
+  .line .qty{background:var(--panel2);border:1px solid var(--line);border-radius:8px;min-width:26px;height:26px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px}
+  .line .info{flex:1;min-width:0}.line .info .ln-nm{font-size:13px;font-weight:600}.line .info .ln-mod{font-size:11px;color:var(--mut);margin-top:2px}
+  .line .ln-pr{font-weight:700;font-size:13px}.line .rm{color:var(--red);background:transparent;font-size:16px;padding:0 4px}
+  .totals{padding:12px 16px;border-top:1px solid var(--line);font-size:13px}
+  .totrow{display:flex;justify-content:space-between;padding:3px 0;color:var(--mut)}.totrow.big{color:var(--txt);font-weight:800;font-size:18px;padding-top:8px}
+  .actions{padding:12px;display:flex;gap:8px}
+  .btn{padding:13px;border-radius:12px;font-weight:700;font-size:14px;flex:1;text-align:center;transition:.12s}
+  .btn.primary{background:var(--brand);color:#fff}.btn.primary:hover{background:var(--brand2)}
+  .btn.ghost{background:var(--panel2);border:1px solid var(--line);color:var(--txt)}.btn.green{background:var(--green);color:#062a1c}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+  .grid{display:grid;gap:14px}.kpis{grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px}
+  .card h4{margin:0 0 4px;font-size:13px;color:var(--mut);font-weight:600}.card .val{font-size:26px;font-weight:800}
+  .delta{font-size:12px;margin-top:4px}.up{color:var(--green)}.sec-title{font-size:14px;font-weight:700;margin:6px 0 12px;color:var(--mut);text-transform:uppercase;letter-spacing:.5px}
+  table{width:100%;border-collapse:collapse;font-size:13px}th{text-align:left;color:var(--mut);font-weight:600;padding:10px 12px;border-bottom:1px solid var(--line);font-size:12px}
+  td{padding:11px 12px;border-bottom:1px solid var(--line)}tr:last-child td{border-bottom:none}
+  .tag{display:inline-block;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:700}
+  .tag.green{background:rgba(39,194,129,.15);color:var(--green)}.tag.amber{background:rgba(245,176,66,.15);color:var(--amber)}
+  .tag.red{background:rgba(239,77,90,.15);color:var(--red)}.tag.blue{background:rgba(77,141,245,.15);color:var(--blue)}
+  .floor{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px}
+  .tbl{aspect-ratio:1;border-radius:var(--radius);border:2px solid var(--line);background:var(--panel);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-weight:700;transition:.12s}
+  .tbl:hover{border-color:var(--brand)}.tbl.seated{border-color:var(--green);background:rgba(39,194,129,.07)}
+  .tbl .tnum{font-size:22px}.tbl .tst{font-size:11px;color:var(--mut)}.seats{font-size:11px;color:var(--mut)}
+  .kds{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;align-items:start}
+  .ticket{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+  .ticket .thd{padding:10px 14px;background:var(--panel2);display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line)}.ticket .thd .num{font-weight:800}
+  .ticket .tbody{padding:12px 14px;font-size:13px}.ticket .tbody .it{padding:5px 0;border-bottom:1px dashed var(--line)}.ticket .tbody .it:last-child{border:none}
+  .ticket .tbody .mods{color:var(--amber);font-size:11px;margin-left:14px}.ticket .tfoot{padding:10px 14px;border-top:1px solid var(--line)}
+  .overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:50;padding:20px}.overlay.show{display:flex}
+  .modal{background:var(--panel);border:1px solid var(--line);border-radius:18px;width:100%;max-width:460px;box-shadow:var(--shadow);max-height:90vh;overflow:auto}
+  .mhd{padding:16px 20px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}.mhd h3{margin:0;font-size:17px}
+  .mbd{padding:20px}.x{background:transparent;font-size:22px;color:var(--mut)}
+  .modrow{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 18px}
+  .chip{padding:9px 14px;border-radius:30px;background:var(--panel2);border:1px solid var(--line);font-size:13px;font-weight:600}.chip.sel{background:var(--brand);border-color:var(--brand);color:#fff}
+  .fld{margin-bottom:14px}.fld label{display:block;font-size:12px;color:var(--mut);margin-bottom:6px;font-weight:600}
+  .fld input,.fld select{width:100%;padding:11px 12px;border-radius:10px;background:var(--panel2);border:1px solid var(--line);color:var(--txt);font-size:14px}
+  .tips{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:8px 0 16px}
+  .tipbtn{padding:16px 8px;border-radius:12px;background:var(--panel2);border:2px solid var(--line);text-align:center}.tipbtn .p{font-size:18px;font-weight:800}.tipbtn .a{font-size:12px;color:var(--mut)}.tipbtn.sel{border-color:var(--green);background:rgba(39,194,129,.1)}
+  .paymethods{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin:12px 0}
+  .pm{padding:16px;border-radius:12px;background:var(--panel2);border:2px solid var(--line);text-align:center;font-weight:700;font-size:13px}.pm .ic{font-size:24px;display:block;margin-bottom:6px}.pm.sel{border-color:var(--brand)}
+  .receipt{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;background:#fff;color:#111;border-radius:10px;padding:20px}
+  .receipt hr{border:none;border-top:1px dashed #999;margin:8px 0}.receipt .r{display:flex;justify-content:space-between}.receipt .c{text-align:center}
+  .bar{height:8px;background:var(--panel2);border-radius:6px;overflow:hidden;margin-top:6px}.bar>i{display:block;height:100%;background:var(--brand)}
+  .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(120px);background:var(--green);color:#062a1c;padding:13px 22px;border-radius:30px;font-weight:700;box-shadow:var(--shadow);transition:.3s;z-index:99}.toast.show{transform:translateX(-50%) translateY(0)}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  #stripe-element{background:#fff;padding:12px;border-radius:10px;margin:10px 0}
+  .modebadge{font-size:11px;padding:3px 8px;border-radius:20px;background:var(--panel2);border:1px solid var(--line);color:var(--mut)}
+  /* printing: only #printArea shows on paper, sized for an 80mm receipt roll */
+  #printArea{display:none}
+  @media print{
+    body{background:#fff}
+    body *{visibility:hidden}
+    #printArea,#printArea *{visibility:visible}
+    #printArea{display:block;position:absolute;left:0;top:0;width:280px;color:#000;
+      font-family:"SF Mono",ui-monospace,Menlo,monospace;font-size:12px;padding:6px}
+    #printArea hr{border:none;border-top:1px dashed #000;margin:6px 0}
+    #printArea .r{display:flex;justify-content:space-between}
+    #printArea .c{text-align:center}
+    @page{margin:6mm}
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="sidebar">
+    <div class="logo">P</div>
+    <div class="nav" id="nav"></div>
+  </div>
+  <div class="main">
+    <div class="topbar">
+      <div><h1 id="vtitle">Order</h1><div class="sub" id="vsub">New check</div></div>
+      <div class="spacer"></div>
+      <span class="pill" id="connpill" onclick="flushOutbox()" style="cursor:pointer;color:var(--green)">🟢 Online</span>
+      <span class="modebadge" id="modebadge">…</span>
+      <div class="pill">📅 <b id="clock"></b></div>
+    </div>
+    <div class="view" id="view"></div>
+  </div>
+</div>
+<div class="overlay" id="overlay"><div class="modal" id="modal"></div></div>
+<div class="toast" id="toastEl"></div>
+<div id="printArea"></div>
+
+<script>
+const API = '';  // same origin
+const $ = s => document.querySelector(s);
+const money = n => '$' + Number(n).toFixed(2);
+let TOKEN = localStorage.getItem('pp_token') || null;
+let ME = null;  // {id, name, role, routes}
+
+/* ===== OFFLINE ENGINE =====
+   The POS keeps working when the network/server drops:
+   - GET responses are cached so screens still render from last-known data
+   - new orders and CASH payments are queued in an outbox (localStorage)
+   - when the connection returns, the outbox auto-syncs to the server
+   Card payments, refunds, voids and menu edits require a connection. */
+let ONLINE = true;
+let OUTBOX  = JSON.parse(localStorage.getItem('pp_outbox')  || '[]');  // [{type,tempId,payload}]
+let PENDING = JSON.parse(localStorage.getItem('pp_pending') || '[]');  // local unsynced tickets
+const saveOutbox  = () => { localStorage.setItem('pp_outbox',  JSON.stringify(OUTBOX));  updateConn(); };
+const savePending = () => { localStorage.setItem('pp_pending', JSON.stringify(PENDING)); };
+class OfflineError extends Error { constructor(m){ super(m); this.offline = true; } }
+const isGet = o => !o.method || o.method === 'GET';
+const cacheSet = (p,d) => { try{ localStorage.setItem('pp_cache_'+p, JSON.stringify(d)); }catch{} };
+const cacheGet = p => { try{ const v=localStorage.getItem('pp_cache_'+p); return v?JSON.parse(v):null; }catch{ return null; } };
+
+async function api(path, opts={}){
+  const headers = {'Content-Type':'application/json', ...(opts.headers||{})};
+  if(TOKEN) headers.Authorization = 'Bearer '+TOKEN;
+  let r;
+  try {
+    r = await fetch(API+'/api'+path, {...opts, headers});
+  } catch(e){                       // network/server unreachable
+    goOffline();
+    if(isGet(opts)){ const c = cacheGet(path); if(c !== null) return c; }
+    throw new OfflineError('offline');
+  }
+  if(!ONLINE) goOnline();           // a successful request means we're back
+  if(r.status===401){ logout(true); throw new Error('Please log in'); }
+  if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||r.statusText);
+  const data = r.status===204 ? null : await r.json();
+  if(isGet(opts)) cacheSet(path, data);
+  return data;
+}
+
+let _pollIv = null;
+function goOffline(){ if(ONLINE){ ONLINE=false; updateConn(); toast('📴 Offline — orders will be queued'); startPoll(); } }
+function goOnline(){ if(!ONLINE){ ONLINE=true; updateConn(); stopPoll(); toast('🟢 Back online — syncing'); flushOutbox(); } }
+function startPoll(){ if(_pollIv) return; _pollIv=setInterval(async()=>{ try{ const r=await fetch(API+'/api/health'); if(r.ok) goOnline(); }catch{} }, 5000); }
+function stopPoll(){ if(_pollIv){ clearInterval(_pollIv); _pollIv=null; } }
+function updateConn(){
+  const el=document.getElementById('connpill'); if(!el) return;
+  const n=OUTBOX.length;
+  el.innerHTML = ONLINE ? (n?`🟢 Online · syncing ${n}`:'🟢 Online') : `📴 Offline${n?` · ${n} queued`:''}`;
+  el.style.color = ONLINE ? 'var(--green)' : 'var(--amber)';
+}
+window.addEventListener('online',  ()=>goOnline());
+window.addEventListener('offline', ()=>goOffline());
+
+let _flushing=false;
+async function flushOutbox(){
+  if(_flushing || !ONLINE || !OUTBOX.length){ updateConn(); return; }
+  _flushing=true;
+  try{
+    while(OUTBOX.length){
+      const op=OUTBOX[0];
+      if(op.type==='order'){
+        const order=await api('/orders',{method:'POST',body:JSON.stringify(op.payload)});
+        await api('/orders/'+order.id+'/fire',{method:'POST'});
+        PENDING=PENDING.filter(p=>p.tempId!==op.tempId); savePending();
+      } else if(op.type==='payment'){
+        // offline payments are cash/wallet only; record directly (no card auth needed)
+        await api('/payments/complete',{method:'POST',body:JSON.stringify({
+          intentId:'offline_'+(op.tempId||Date.now()), method:op.payload.method,
+          lines:op.payload.lines, tip:op.payload.tip, table:op.payload.table, orderId:op.payload.orderId||null })});
+      }
+      OUTBOX.shift(); saveOutbox();
+    }
+    toast('✅ Synced all queued items');
+    if(['kds','floor','dash'].includes(route)) render();
+  } catch(e){
+    // a failure (still offline, or a real error) — keep remaining items, retry later
+  } finally { _flushing=false; updateConn(); }
+}
+
+let CFG = {paymentMode:'mock', taxRate:0.0825, publishableKey:null};
+let MENU = [], CATS = [], activeCat = '', check = [], tableNo = null, route='pos';
+const MODIFIERS = ["No onions","Extra cheese (+$1.50)","Add bacon (+$2)","Gluten-free (+$2)","Spicy","Well done","On the side"];
+
+const NAV=[{id:"pos",ic:"🧾",label:"Order"},{id:"floor",ic:"🍽️",label:"Tables"},{id:"kds",ic:"👨‍🍳",label:"Kitchen"},
+  {id:"dash",ic:"📊",label:"Reports"},{id:"menu",ic:"📖",label:"Menu"},{id:"team",ic:"🧑‍🤝‍🧑",label:"Team"},{id:"settings",ic:"⚙️",label:"Setup"}];
+const titles={pos:["Order","Build a check"],floor:["Tables","Floor plan"],kds:["Kitchen Display","Live tickets"],
+  dash:["Reports","Performance"],menu:["Menu Management","Items & pricing"],team:["Team","Staff"],settings:["Setup","Settings"]};
+
+function toast(m){const t=$("#toastEl");t.textContent=m;t.classList.add("show");clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove("show"),2400)}
+function openModal(h){$("#modal").innerHTML=h;$("#overlay").classList.add("show")}
+function closeModal(){$("#overlay").classList.remove("show")}
+$("#overlay").addEventListener("click",e=>{if(e.target.id==="overlay")closeModal()});
+
+function totals(lines){const sub=lines.reduce((a,l)=>a+(l.price+(l.mods||[]).reduce((s,m)=>{const x=String(m).match(/\+\$([0-9.]+)/);return s+(x?+x[1]:0)},0))*l.qty,0);
+  const tax=sub*CFG.taxRate;return{sub,tax,total:sub+tax}}
+
+function allowedNav(){ const r = (ME&&ME.routes)||[]; return NAV.filter(n=>r.includes(n.id)); }
+function renderNav(){
+  $("#nav").innerHTML = allowedNav().map(n=>`<button class="navbtn ${route===n.id?'active':''}" onclick="go('${n.id}')"><span class="ic">${n.ic}</span>${n.label}</button>`).join("")
+    + `<button class="navbtn" style="margin-top:auto" onclick="logout()"><span class="ic">⎋</span>Logout</button>`;
+}
+function go(r){ if(!((ME&&ME.routes)||[]).includes(r)){toast('Not allowed for your role');return} route=r;renderNav();render() }
+
+async function render(){
+  $("#vtitle").textContent=titles[route][0];$("#vsub").textContent=titles[route][1];
+  const v=$("#view");
+  if(route==="pos")v.innerHTML=posView();
+  else if(route==="floor")v.innerHTML=await floorView();
+  else if(route==="kds")v.innerHTML=await kdsView();
+  else if(route==="dash")v.innerHTML=await dashView();
+  else if(route==="menu")v.innerHTML=await menuView();
+  else if(route==="team")v.innerHTML=await teamView();
+  else if(route==="settings")v.innerHTML=settingsView();
+}
+
+/* ---- POS ---- */
+function posView(){
+  const cats=CATS.map(c=>`<button class="cat ${c===activeCat?'active':''}" onclick="setCat('${c}')">${c}</button>`).join("");
+  const items=MENU.filter(i=>i.category===activeCat && i.active!==false).map(it=>`<button class="item" onclick="addItem('${it.id}')"
+    ${it.image?`style="background-image:linear-gradient(rgba(15,17,21,.45),rgba(15,17,21,.85)),url('${it.image}');background-size:cover;background-position:center"`:''}>
+    ${it.image?'':`<div class="emoji">${it.emoji}</div>`}<div><div class="nm">${it.name}</div><div class="pr">${money(it.price)}</div></div></button>`).join("")
+    || `<div class="empty">No available items in ${activeCat}.</div>`;
+  return `<div class="pos"><div class="menuwrap"><div class="cats">${cats}</div><div class="items">${items}</div></div>${checkPanel()}</div>`;
+}
+function checkPanel(){
+  const t=totals(check);
+  const lines=check.length?check.map((l,i)=>`<div class="line"><div class="qty">${l.qty}</div>
+    <div class="info"><div class="ln-nm">${l.name}</div>${(l.mods&&l.mods.length)?`<div class="ln-mod">${l.mods.join(", ")}</div>`:""}
+    <div style="margin-top:5px;display:flex;gap:6px">
+      <button class="chip" style="padding:2px 9px" onclick="chgQty(${i},-1)">−</button>
+      <button class="chip" style="padding:2px 9px" onclick="chgQty(${i},1)">+</button>
+      <button class="chip" style="padding:2px 9px" onclick="editMods(${i})">⚙️</button></div></div>
+    <div style="text-align:right"><div class="ln-pr">${money((l.price+(l.mods||[]).reduce((s,m)=>{const x=String(m).match(/\+\$([0-9.]+)/);return s+(x?+x[1]:0)},0))*l.qty)}</div>
+    <button class="rm" onclick="rmLine(${i})">✕</button></div></div>`).join("")
+    :`<div class="empty">🛒 No items yet.<br>Tap menu items to start.</div>`;
+  return `<div class="check"><div class="hd"><h3>${tableNo?('Table '+tableNo):'New Check'}</h3>
+    <button class="chip" onclick="assignTable()">${tableNo?'Change':'🍽️ Table'}</button></div>
+    <div class="lines">${lines}</div>
+    <div class="totals"><div class="totrow"><span>Subtotal</span><span>${money(t.sub)}</span></div>
+      <div class="totrow"><span>Tax</span><span>${money(t.tax)}</span></div>
+      <div class="totrow big"><span>Total</span><span>${money(t.total)}</span></div></div>
+    <div class="actions"><button class="btn ghost" ${!check.length?'disabled':''} onclick="sendToKitchen()">Send 👨‍🍳</button>
+      <button class="btn primary" ${!check.length?'disabled':''} onclick="startPayment()">Pay ${money(t.total)}</button></div>
+    ${check.length?`<div style="padding:0 12px 12px"><button class="btn ghost" style="width:100%" onclick="clearCheck()">Clear</button></div>`:""}</div>`;
+}
+function setCat(c){activeCat=c;render()}
+function addItem(id){const it=MENU.find(m=>m.id===id);const ex=check.find(l=>l.id===id&&(!l.mods||!l.mods.length));
+  if(ex)ex.qty++;else check.push({id,name:it.name,price:it.price,qty:1,mods:[]});render()}
+function chgQty(i,d){check[i].qty+=d;if(check[i].qty<=0)check.splice(i,1);render()}
+function rmLine(i){check.splice(i,1);render()}
+function clearCheck(){check=[];tableNo=null;render()}
+function editMods(i){const sel=new Set(check[i].mods||[]);
+  const chips=MODIFIERS.map(m=>`<button class="chip ${sel.has(m)?'sel':''}" data-m="${m}" onclick="this.classList.toggle('sel')">${m}</button>`).join("");
+  openModal(`<div class="mhd"><h3>Modify · ${check[i].name}</h3><button class="x" onclick="closeModal()">✕</button></div>
+    <div class="mbd"><div class="modrow">${chips}</div><button class="btn primary" onclick="saveMods(${i})">Save</button></div>`)}
+function saveMods(i){check[i].mods=[...document.querySelectorAll('.modrow .chip.sel')].map(c=>c.dataset.m);closeModal();render()}
+function assignTable(){let o="";for(let n=1;n<=12;n++)o+=`<button class="chip ${tableNo===n?'sel':''}" onclick="setTable(${n})">T${n}</button>`;
+  openModal(`<div class="mhd"><h3>Assign Table</h3><button class="x" onclick="closeModal()">✕</button></div>
+    <div class="mbd"><div class="modrow">${o}</div><button class="chip" onclick="setTable(null)">Takeout</button></div>`)}
+function setTable(n){tableNo=n;closeModal();render()}
+
+function toggleSetting(key,on){ localStorage.setItem(key, on?'1':'0'); toast(on?'On':'Off'); }
+const autoTicket = () => localStorage.getItem('pp_autoprint_ticket')==='1';
+async function sendToKitchen(){
+  const payload={lines:check.map(l=>({name:l.name,price:l.price,qty:l.qty,mods:l.mods})),table:tableNo};
+  if(ONLINE){
+    try{const order=await api('/orders',{method:'POST',body:JSON.stringify(payload)});
+      await api('/orders/'+order.id+'/fire',{method:'POST'});
+      if(autoTicket()) doPrint(ticketInner(order));
+      check=[];tableNo=null;render();toast('✅ Order #'+order.number+' sent to kitchen');return;
+    }catch(e){ if(!e.offline){ toast('⚠️ '+e.message); return; } /* offline → fall through to queue */ }
+  }
+  queueOrder(payload);
+}
+function queueOrder(payload){
+  const tempId='tmp_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
+  const number='P'+String(PENDING.length+1).padStart(2,'0');
+  OUTBOX.push({type:'order',tempId,payload}); saveOutbox();
+  const ticket={tempId,number,table:payload.table,lines:payload.lines,firedAt:Date.now(),status:'cooking',pending:true};
+  PENDING.push(ticket); savePending();
+  if(autoTicket()) doPrint(ticketInner(ticket));
+  check=[];tableNo=null;render();toast('📴 Order '+number+' queued — will sync when online');
+}
+
+/* ---- PAYMENT (Stripe test mode or mock) ---- */
+let pay={};
+async function startPayment(){
+  const t=totals(check);
+  pay={lines:JSON.parse(JSON.stringify(check)),table:tableNo,base:t.total,sub:t.sub,tax:t.tax,tip:+(t.total*0.18).toFixed(2),tipPct:18,method:'card'};
+  paymentModal();
+}
+function paymentModal(){
+  const grand=pay.base+pay.tip;
+  const tips=[15,18,20,25].map(p=>`<button class="tipbtn ${pay.tipPct===p?'sel':''}" onclick="setTip(${p})"><div class="p">${p}%</div><div class="a">${money(pay.base*p/100)}</div></button>`).join("");
+  const methods=[["card","💳","Card"],["cash","💵","Cash"],["wallet","📱","Wallet"]].map(m=>`<button class="pm ${pay.method===m[0]?'sel':''}" onclick="setMethod('${m[0]}')"><span class="ic">${m[1]}</span>${m[2]}</button>`).join("");
+  openModal(`<div class="mhd"><h3>Payment · ${money(grand)}</h3><button class="x" onclick="closeModal()">✕</button></div><div class="mbd">
+    <div class="sec-title">Add tip</div><div class="tips">${tips}</div>
+    <div class="fld"><label>Custom tip ($)</label><input id="ctip" type="number" step="0.01" value="${pay.tip.toFixed(2)}" oninput="setCustomTip(this.value)"></div>
+    <div class="sec-title">Payment method</div><div class="paymethods">${methods}</div>
+    <div class="totals" style="border-top:none;padding:0">
+      <div class="totrow"><span>Subtotal</span><span>${money(pay.sub)}</span></div>
+      <div class="totrow"><span>Tax</span><span>${money(pay.tax)}</span></div>
+      <div class="totrow"><span>Tip</span><span>${money(pay.tip)}</span></div>
+      <div class="totrow big"><span>Total Due</span><span>${money(grand)}</span></div></div>
+    <button class="btn green" style="margin-top:10px" onclick="processPayment()">Charge ${money(grand)}</button></div>`);
+}
+function setTip(p){pay.tipPct=p;pay.tip=+(pay.base*p/100).toFixed(2);paymentModal()}
+function setCustomTip(v){pay.tip=parseFloat(v)||0;pay.tipPct=null;$(".mhd h3").textContent='Payment · '+money(pay.base+pay.tip)}
+function setMethod(m){pay.method=m;paymentModal()}
+
+async function processPayment(){
+  const grand=pay.base+pay.tip;
+  // Offline: card needs a connection; cash/wallet can be queued.
+  if(!ONLINE){
+    if(pay.method==='card'){ toast('💳 Card needs a connection — take cash or wait to reconnect'); return; }
+    return queuePayment(grand);
+  }
+  try{
+    const intent=await api('/payments/intent',{method:'POST',body:JSON.stringify({lines:pay.lines.map(l=>({name:l.name,price:l.price,qty:l.qty,mods:l.mods})),tip:pay.tip,table:pay.table})});
+    if(pay.method==='card' && intent.mode==='stripe' && CFG.publishableKey){
+      return stripeCardFlow(intent);   // real Stripe Payment Element
+    }
+    // mock / cash / wallet: show animated auth then complete
+    openModal(`<div class="mbd c" style="text-align:center;padding:50px 30px"><div style="font-size:46px">${pay.method==='cash'?'💵':'💳'}</div>
+      <h3 style="margin:14px 0 6px">${pay.method==='cash'?'Cash tendered…':'Authorizing…'}</h3>
+      <p style="color:var(--mut)">${money(grand)} · ${intent.mode==='mock'?'mock processor':'stripe'}</p>
+      <div class="bar"><i style="width:0%" id="ab"></i></div></div>`);
+    let w=0;const iv=setInterval(async()=>{w+=25;$("#ab").style.width=w+"%";if(w>=100){clearInterval(iv);await completePayment(intent.id,grand)}},220);
+  }catch(e){
+    if(e.offline){
+      if(pay.method==='card'){ toast('💳 Connection lost — card not charged'); return; }
+      return queuePayment(grand);    // cash/wallet: queue instead of failing
+    }
+    toast('⚠️ '+e.message);
+  }
+}
+function queuePayment(grand){
+  const tempId='pay_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
+  OUTBOX.push({type:'payment',tempId,payload:{
+    method:pay.method, tip:pay.tip, table:pay.table, orderId:pay.orderId||null,
+    lines:pay.lines.map(l=>({name:l.name,price:l.price,qty:l.qty,mods:l.mods}))}});
+  saveOutbox();
+  if(pay.table){ PENDING=PENDING.filter(p=>p.table!==pay.table); savePending(); }  // table settled locally
+  check=[];tableNo=null;showReceipt(grand);renderNav();
+  toast('📴 '+pay.method+' payment queued — will sync when online');
+}
+async function stripeCardFlow(intent){
+  const grand=intent.amount;
+  openModal(`<div class="mhd"><h3>Card · ${money(grand)}</h3><button class="x" onclick="closeModal()">✕</button></div>
+    <div class="mbd"><p style="color:var(--mut);font-size:13px;margin-top:0">Test card: 4242 4242 4242 4242 · any future date · any CVC</p>
+    <div id="stripe-element"></div><div id="stripe-err" style="color:var(--red);font-size:13px;min-height:18px"></div>
+    <button class="btn green" id="paybtn" onclick="confirmStripe('${intent.id}',${grand})">Pay ${money(grand)}</button></div>`);
+  const stripe=Stripe(CFG.publishableKey);
+  window._stripe=stripe;
+  const elements=stripe.elements({clientSecret:intent.clientSecret,appearance:{theme:'night'}});
+  window._elements=elements;
+  const pe=elements.create('payment');pe.mount('#stripe-element');
+}
+async function confirmStripe(intentId,grand){
+  $("#paybtn").disabled=true;$("#paybtn").textContent='Processing…';
+  const {error}=await window._stripe.confirmPayment({elements:window._elements,redirect:'if_required'});
+  if(error){$("#stripe-err").textContent=error.message;$("#paybtn").disabled=false;$("#paybtn").textContent='Pay '+money(grand);return}
+  await completePayment(intentId,grand);
+}
+async function completePayment(intentId,grand){
+  try{
+    await api('/payments/complete',{method:'POST',body:JSON.stringify({intentId,method:pay.method,lines:pay.lines.map(l=>({name:l.name,price:l.price,qty:l.qty,mods:l.mods})),tip:pay.tip,table:pay.table})});
+    // clear any matching open table order
+    check=[];tableNo=null;showReceipt(grand);renderNav();
+  }catch(e){toast('⚠️ '+e.message)}
+}
+let _lastReceipt=null;   // {pay, grand, when} for print/email
+function receiptInner(p,grand,when){
+  const items=p.lines.map(l=>`<div class="r"><span>${l.qty}× ${l.name}</span><span>${money(l.price*l.qty)}</span></div>${(l.mods&&l.mods.length)?`<div style="color:#777;font-size:11px;margin-left:14px">${l.mods.join(", ")}</div>`:""}`).join("");
+  return `<div class="c"><b>PLATEPOINT</b><br>123 Main St · (555) 010-2233</div><hr>
+    <div class="r"><span>${when}</span></div>${p.table?`<div class="r"><span>Table</span><span>${p.table}</span></div>`:`<div class="r"><span>Takeout</span><span></span></div>`}<hr>
+    ${items}<hr><div class="r"><span>Subtotal</span><span>${money(p.sub)}</span></div>
+    <div class="r"><span>Tax</span><span>${money(p.tax)}</span></div><div class="r"><span>Tip</span><span>${money(p.tip)}</span></div>
+    <div class="r"><b>TOTAL</b><b>${money(grand)}</b></div><div class="r"><span>Paid (${p.method})</span><span>${money(grand)}</span></div><hr>
+    <div class="c">Thank you! 🙏</div>`;
+}
+function showReceipt(grand){
+  const when=new Date().toLocaleString();
+  _lastReceipt={pay:JSON.parse(JSON.stringify(pay)),grand,when};
+  openModal(`<div class="mhd"><h3>✅ Payment Approved</h3><button class="x" onclick="closeModal();render()">✕</button></div>
+    <div class="mbd"><div class="receipt">${receiptInner(pay,grand,when)}</div>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button class="btn ghost" onclick="printReceipt()">🖨 Print</button>
+      <button class="btn ghost" onclick="emailReceipt()">✉️ Email</button>
+      <button class="btn primary" onclick="closeModal();render()">Done</button></div></div>`);
+  if(localStorage.getItem('pp_autoprint_receipt')==='1') setTimeout(printReceipt,150);
+  toast('💰 '+money(grand)+' charged');
+}
+function doPrint(html){ const pa=document.getElementById('printArea'); pa.innerHTML=html; window.print(); }
+function printReceipt(){
+  if(!_lastReceipt) return;
+  doPrint(receiptInner(_lastReceipt.pay,_lastReceipt.grand,_lastReceipt.when));
+}
+function emailReceipt(){
+  if(!_lastReceipt) return;
+  const p=_lastReceipt.pay,g=_lastReceipt.grand;
+  const lines=p.lines.map(l=>`${l.qty}x ${l.name}  ${money(l.price*l.qty)}`).join('%0D%0A');
+  const body=`PlatePoint Receipt%0D%0A${_lastReceipt.when}%0D%0A%0D%0A${lines}%0D%0A%0D%0ASubtotal ${money(p.sub)}%0D%0ATax ${money(p.tax)}%0D%0ATip ${money(p.tip)}%0D%0ATOTAL ${money(g)}%0D%0APaid (${p.method})%0D%0A%0D%0AThank you!`;
+  window.location.href=`mailto:?subject=Your%20PlatePoint%20Receipt&body=${body}`;
+  toast('✉️ Opening email…');
+}
+// Kitchen ticket printing
+function ticketInner(o){
+  const when=new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+  return `<div class="c" style="font-size:16px;font-weight:bold">KITCHEN</div>
+    <div class="c">Order #${o.number}</div>
+    <div class="r"><span>${o.table?('Table '+o.table):'Takeout'}</span><span>${when}</span></div><hr>
+    ${o.lines.map(it=>`<div style="font-size:14px;font-weight:bold">${it.qty}× ${it.name}</div>${(it.mods&&it.mods.length)?`<div style="margin-left:12px">↳ ${it.mods.join(', ')}</div>`:''}`).join('')}
+    <hr><div class="c">— fire —</div>`;
+}
+function printTicketById(idArg, local){
+  const list = window._kds || [];
+  const o = list.find(x => (local? x.tempId===idArg : x.id===idArg));
+  if(o){ doPrint(ticketInner(o)); }
+}
+
+/* ---- FLOOR ---- */
+async function floorView(){
+  const tables=await api('/tables').catch(()=>cacheGet('/tables')||[]);
+  const pendingTables=new Set(PENDING.filter(p=>p.table).map(p=>p.table));
+  return `${ONLINE?'':'<div class="card" style="margin-bottom:14px;border-color:var(--amber)">📴 Offline — showing last-synced tables plus locally queued ones.</div>'}
+    <div class="sec-title">Floor Plan — Main Dining</div><div class="floor">${tables.map(t=>{
+    const seated=t.status!=='open'||pendingTables.has(t.number);
+    return `<button class="tbl ${seated?'seated':''}" onclick="tableClick(${t.number})">
+      <div class="tnum">${t.number}</div><div class="tst">${pendingTables.has(t.number)?'queued':t.status}</div><div class="seats">2–4 seats</div></button>`}).join("")}</div>`;
+}
+async function tableClick(n){
+  const orders=await api('/orders?status=open').catch(()=>[]);
+  const cooking=await api('/orders?status=cooking').catch(()=>[]);
+  const open=[...orders,...cooking].find(o=>o.table===n);
+  check= open? open.lines.map(l=>({...l})) : [];
+  tableNo=n;route="pos";renderNav();render();toast(open?('Resumed Table '+n):('New check · Table '+n));
+}
+
+/* ---- KDS ---- */
+async function kdsView(){
+  const server=await api('/orders?status=cooking').catch(()=>cacheGet('/orders?status=cooking')||[]);
+  const local=PENDING.map(p=>({...p,_local:true}));   // queued-offline tickets
+  const orders=[...local,...server];
+  window._kds=orders;   // expose for ticket printing
+  if(!orders.length)return `<div class="empty" style="padding:80px">👨‍🍳 No active tickets.</div>`;
+  return `<div class="kds">${orders.map(o=>{const mins=Math.floor((Date.now()-(o.firedAt||o.createdAt))/60000);const late=mins>=10;
+    const idArg=o._local?o.tempId:o.id;
+    return `<div class="ticket" ${o._local?'style="border-color:var(--amber)"':''}><div class="thd"><span class="num">#${o.number}</span>
+    ${o._local?'<span class="tag amber">⏳ Queued</span>':`<span class="tag ${late?'red':'blue'}">${o.table?('Table '+o.table):'Takeout'}</span>`}</div>
+    <div class="tbody">${o.lines.map(it=>`<div class="it">${it.qty}× ${it.name}${(it.mods&&it.mods.length)?`<div class="mods">↳ ${it.mods.join(", ")}</div>`:""}</div>`).join("")}</div>
+    <div class="tfoot"><div style="font-size:12px;${late?'color:var(--red);font-weight:700':'color:var(--mut)'}">⏱ ${mins}m ${o._local?'· waiting to sync':(late?'· LATE':'')}</div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button class="btn ghost" style="padding:9px" onclick="bump('${idArg}',${o._local?'true':'false'})">✓ Bump</button>
+      <button class="btn ghost" style="padding:9px;flex:0" onclick="printTicketById('${idArg}',${o._local?'true':'false'})">🖨</button>
+      <button class="btn ghost" style="padding:9px;flex:0;color:var(--red)" onclick="voidOrder('${idArg}','${o.number}',${o._local?'true':'false'})">✕</button>
+    </div></div></div>`}).join("")}</div>`;
+}
+async function bump(id,local){
+  if(local){ PENDING=PENDING.filter(p=>p.tempId!==id); savePending(); render(); toast('Queued ticket bumped'); return; }
+  try{ await api('/orders/'+id+'/bump',{method:'POST'}); render(); toast('Ticket ready'); }
+  catch(e){ toast(e.offline?'📴 Offline — try when connected':'⚠️ '+e.message); }
+}
+async function voidOrder(id,num,local){
+  if(!confirm('Void order #'+num+'? This cancels it before payment.'))return;
+  if(local){ OUTBOX=OUTBOX.filter(op=>op.tempId!==id); saveOutbox();
+    PENDING=PENDING.filter(p=>p.tempId!==id); savePending(); render(); toast('Queued order voided'); return; }
+  try{await api('/orders/'+id+'/void',{method:'POST',body:JSON.stringify({reason:'staff void'})});render();toast('Order #'+num+' voided');}
+  catch(e){toast(e.offline?'📴 Void needs a connection':'⚠️ '+e.message)}
+}
+
+/* ---- DASHBOARD ---- */
+let _lastZ=null;
+async function openZReport(date){
+  const z=await api('/reports/zreport'+(date?('?date='+date):'')).catch(()=>null);
+  if(!z){ toast('🧾 Z-Report needs a connection'); return; }
+  _lastZ=z;
+  openModal(`<div class="mhd"><h3>🧾 Daily Close-Out</h3><button class="x" onclick="closeModal()">✕</button></div>
+   <div class="mbd">
+     <div class="fld"><label>Business date</label><input type="date" value="${z.date}" onchange="openZReport(this.value)"></div>
+     <div class="receipt">${zInner(z)}</div>
+     <div style="display:flex;gap:8px;margin-top:14px">
+       <button class="btn ghost" onclick="printZ()">🖨 Print</button>
+       <button class="btn primary" onclick="closeModal()">Close</button></div></div>`);
+}
+function zInner(z){
+  const r=(l,v,b)=>`<div class="r" ${b?'style="font-weight:800"':''}><span>${l}</span><span>${v}</span></div>`;
+  const methods=Object.entries(z.byMethod).map(([m,v])=>r('· '+m,money(v))).join('')||r('· —','');
+  const tops=z.topSellers.slice(0,5).map(([n,c])=>r(n,c+'×')).join('')||r('—','');
+  return `<div class="c"><b>PLATEPOINT — Z REPORT</b><br>End-of-Day Close-Out</div><hr>
+    <div class="r"><span>Business date</span><span>${z.date}</span></div>
+    <div class="r"><span>Printed</span><span>${new Date(z.generatedAt).toLocaleString()}</span></div><hr>
+    ${r('Subtotal sales',money(z.subtotalSales))}
+    ${r('Tax collected',money(z.tax))}
+    ${r('Tips',money(z.tips))}
+    ${r('GROSS SALES',money(z.gross),true)}
+    ${r('Refunds ('+z.refundCount+')','-'+money(z.refunds))}
+    ${r('NET SALES',money(z.net),true)}<hr>
+    ${r('Transactions',z.count)}
+    ${r('Avg check',money(z.avgCheck))}
+    ${r('Items sold',z.itemsSold)}
+    ${r('Voids',z.voids)}<hr>
+    <div class="c">— Payment methods —</div>${methods}<hr>
+    <div class="c">— Top sellers —</div>${tops}<hr>
+    <div class="c">Counters cleared for next day</div>`;
+}
+function printZ(){ if(_lastZ) doPrint(zInner(_lastZ)); }
+
+async function dashView(){
+  const empty={gross:0,net:0,refunds:0,orders:0,avgCheck:0,tips:0,tax:0,openChecks:0,byMethod:{},topSellers:[]};
+  const r=await api('/reports/summary').catch(()=>cacheGet('/reports/summary')||empty);
+  const kpi=(h,v,d)=>`<div class="card"><h4>${h}</h4><div class="val">${v}</div><div class="delta up">${d||''}</div></div>`;
+  const maxc=r.topSellers.length?r.topSellers[0][1]:1;
+  const pays=await api('/payments').catch(()=>cacheGet('/payments')||[]);
+  const offlineBanner = ONLINE?'':'<div class="card" style="margin-bottom:14px;border-color:var(--amber)">📴 Offline — figures are from the last sync and exclude items still queued.</div>';
+  const statusTag=p=>{
+    if(p.status==='refunded')return '<span class="tag red">Refunded</span>';
+    if(p.status==='partially_refunded')return `<span class="tag amber">Refunded ${money(p.refundedAmount)}</span>`;
+    return '<span class="tag green">Paid</span>';
+  };
+  const recent=pays.slice(-10).reverse().map(p=>`<tr><td>#${String(p.id).slice(-4)}</td><td>${p.table?('Table '+p.table):'Takeout'}</td>
+    <td><span class="tag ${p.method==='card'?'blue':p.method==='cash'?'green':'amber'}">${p.method}</span></td>
+    <td>${statusTag(p)}</td>
+    <td style="text-align:right;font-weight:700">${money(p.total)}</td>
+    <td style="text-align:right">${(p.status!=='refunded')?`<button class="chip" style="color:var(--red)" onclick='openRefund(${JSON.stringify(JSON.stringify({id:p.id,total:p.total,refundedAmount:p.refundedAmount||0}))})'>Refund</button>`:''}</td></tr>`).join("")||`<tr><td colspan="6" style="text-align:center;color:var(--mut);padding:30px">No sales yet</td></tr>`;
+  return `${offlineBanner}<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <div class="sec-title" style="margin:0">Today's Performance</div>
+      <button class="btn primary" style="flex:0;padding:10px 18px" onclick="openZReport()">🧾 Close Out / Z-Report</button></div>
+    <div class="grid kpis">${kpi("Gross Sales",money(r.gross),"today")}${kpi("Net Sales",money(r.net),"after refunds")}
+    ${kpi("Refunds",money(r.refunds||0),"issued")}${kpi("Orders",r.orders,"closed")}
+    ${kpi("Avg Check",money(r.avgCheck),"per order")}${kpi("Tips",money(r.tips),"to staff")}
+    ${kpi("Tax",money(r.tax),"remit")}${kpi("Open Checks",r.openChecks,"in service")}</div>
+    <div class="row2" style="margin-top:16px">
+      <div class="card"><div class="sec-title">Top Sellers</div>${r.topSellers.length?r.topSellers.map(([n,c])=>`<div style="margin-bottom:12px"><div style="display:flex;justify-content:space-between;font-size:13px"><span>${n}</span><b>${c}</b></div><div class="bar"><i style="width:${c/maxc*100}%"></i></div></div>`).join(""):`<div class="empty">No data</div>`}</div>
+      <div class="card"><div class="sec-title">Payment Methods</div>${Object.entries(r.byMethod).map(([m,v])=>`<div style="margin-bottom:12px"><div style="display:flex;justify-content:space-between;font-size:13px"><span style="text-transform:capitalize">${m}</span><b>${money(v)}</b></div><div class="bar"><i style="width:${r.gross?v/r.gross*100:0}%"></i></div></div>`).join("")||'<div class="empty">No data</div>'}</div></div>
+    <div class="card" style="margin-top:16px"><div class="sec-title">Recent Transactions</div>
+      <table><thead><tr><th>Order</th><th>Location</th><th>Method</th><th>Status</th><th style="text-align:right">Total</th><th></th></tr></thead><tbody>${recent}</tbody></table></div>`;
+}
+function openRefund(json){
+  const p=JSON.parse(JSON.parse(json));
+  const refundable=(p.total-(p.refundedAmount||0)).toFixed(2);
+  openModal(`<div class="mhd"><h3>Refund · #${String(p.id).slice(-4)}</h3><button class="x" onclick="closeModal()">✕</button></div>
+   <div class="mbd">
+     <p style="color:var(--mut);font-size:13px;margin-top:0">Original ${money(p.total)}${p.refundedAmount?` · already refunded ${money(p.refundedAmount)}`:''}. Max refundable <b>${money(+refundable)}</b>.</p>
+     <div class="fld"><label>Refund amount ($)</label><input id="refamt" type="number" step="0.01" value="${refundable}"></div>
+     <div style="display:flex;gap:8px">
+       <button class="btn ghost" onclick="document.getElementById('refamt').value='${refundable}'">Full</button>
+       <button class="btn green" onclick="doRefund('${p.id}',${refundable})">Issue refund</button>
+     </div></div>`);
+}
+async function doRefund(id,max){
+  const amt=parseFloat(document.getElementById('refamt').value);
+  if(!(amt>0)){toast('Enter an amount');return}
+  try{const res=await api('/payments/'+id+'/refund',{method:'POST',body:JSON.stringify({amount:amt})});
+    closeModal();render();toast('💸 Refunded '+money(amt)+(res.refund&&res.refund.mode==='stripe'?' via Stripe':''));}
+  catch(e){toast('⚠️ '+e.message)}
+}
+
+/* ---- MENU MGMT ---- */
+let _menuItems=[];
+async function menuView(){
+  _menuItems=await api('/menu').catch(()=>cacheGet('/menu')||[]);
+  // group by category, preserving sortOrder
+  const cats=[...new Set(_menuItems.map(i=>i.category))];
+  const thumb=it=>it.image
+    ? `<div style="width:42px;height:42px;border-radius:8px;background-image:url('${it.image}');background-size:cover;background-position:center"></div>`
+    : `<div style="width:42px;height:42px;border-radius:8px;background:var(--panel2);display:flex;align-items:center;justify-content:center;font-size:22px">${it.emoji}</div>`;
+  const sections=cats.map(c=>{
+    const list=_menuItems.filter(i=>i.category===c);
+    const rows=list.map((it,idx)=>`<tr style="${it.active===false?'opacity:.5':''}">
+      <td>${thumb(it)}</td>
+      <td><b>${it.name}</b></td>
+      <td>${money(it.price)}</td>
+      <td><span class="tag ${it.active!==false?'green':'red'}">${it.active!==false?'Available':'86’d'}</span></td>
+      <td style="text-align:right;white-space:nowrap">
+        <button class="chip" style="padding:5px 8px" onclick="moveItem('${it.id}',-1)" ${idx===0?'disabled style="opacity:.3"':''}>↑</button>
+        <button class="chip" style="padding:5px 8px" onclick="moveItem('${it.id}',1)" ${idx===list.length-1?'disabled style="opacity:.3"':''}>↓</button>
+        <button class="chip" onclick="toggleAvail('${it.id}')">${it.active!==false?'86':'Restore'}</button>
+        <button class="chip" onclick="editItem('${it.id}')">Edit</button>
+        <button class="chip" style="color:var(--red)" onclick="delItem('${it.id}')">✕</button>
+      </td></tr>`).join("");
+    return `<div class="card" style="margin-bottom:14px"><div class="sec-title">${c} <span style="color:var(--mut);font-weight:400">· ${list.length}</span></div>
+      <table><thead><tr><th></th><th>Name</th><th>Price</th><th>Status</th><th style="text-align:right">Order / Actions</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }).join("");
+  return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <div class="sec-title" style="margin:0">Menu — ${_menuItems.length} items · ${cats.length} categories</div>
+      <button class="btn primary" style="flex:0;padding:10px 18px" onclick="editItem()">+ Add item</button></div>
+    ${sections||'<div class="empty">No items yet.</div>'}`;
+}
+function itemForm(it){
+  it=it||{name:'',category:activeCat||'Mains',price:'',emoji:'🍽️',image:'',active:true};
+  const cats=[...new Set(_menuItems.map(i=>i.category))];
+  openModal(`<div class="mhd"><h3>${it.id?'Edit':'Add'} Menu Item</h3><button class="x" onclick="closeModal()">✕</button></div><div class="mbd">
+    <div style="display:flex;gap:14px;align-items:center;margin-bottom:14px">
+      <div id="imgPreview" style="width:64px;height:64px;border-radius:12px;flex-shrink:0;background:var(--panel2);display:flex;align-items:center;justify-content:center;font-size:30px;${it.image?`background-image:url('${it.image}');background-size:cover;background-position:center`:''}">${it.image?'':it.emoji}</div>
+      <div style="flex:1">
+        <div class="fld" style="margin:0"><label>Photo</label>
+          <input id="mi-image" placeholder="Paste image URL…" value="${(it.image||'').startsWith('data:')?'':(it.image||'')}" oninput="previewImg(this.value)">
+          <input id="mi-file" type="file" accept="image/*" style="margin-top:6px;font-size:12px" onchange="fileToImg(this)"></div>
+      </div></div>
+    <div class="fld"><label>Name</label><input id="mi-name" value="${it.name.replace(/"/g,'&quot;')}"></div>
+    <div class="row2">
+      <div class="fld"><label>Category</label><input id="mi-cat" list="catlist" value="${it.category}">
+        <datalist id="catlist">${cats.map(c=>`<option value="${c}">`).join("")}</datalist></div>
+      <div class="fld"><label>Price ($)</label><input id="mi-price" type="number" step="0.01" value="${it.price}"></div>
+    </div>
+    <div class="fld"><label>Emoji (fallback when no photo)</label><input id="mi-emoji" value="${it.emoji||'🍽️'}"></div>
+    <label style="display:flex;align-items:center;gap:10px;font-size:13px;margin:6px 0 16px;cursor:pointer">
+      <input type="checkbox" id="mi-active" ${it.active!==false?'checked':''}> Available for ordering</label>
+    <button class="btn primary" onclick="saveItem('${it.id||''}')">${it.id?'Save changes':'Add item'}</button></div>`);
+}
+function editItem(id){ itemForm(id?_menuItems.find(i=>i.id===id):null); }
+function previewImg(url){ const p=document.getElementById('imgPreview'); if(!p)return; if(url){p.style.backgroundImage=`url('${url}')`;p.style.backgroundSize='cover';p.style.backgroundPosition='center';p.textContent='';} else {p.style.backgroundImage='';p.textContent=document.getElementById('mi-emoji').value||'🍽️';} }
+function fileToImg(input){
+  const f=input.files&&input.files[0]; if(!f)return;
+  if(f.size>600*1024){ toast('Image too large (max ~600KB)'); input.value=''; return; }
+  const reader=new FileReader();
+  reader.onload=e=>{ document.getElementById('mi-image').value=e.target.result; previewImg(e.target.result); };
+  reader.readAsDataURL(f);
+}
+async function saveItem(id){
+  const body={ name:$("#mi-name").value.trim(), category:$("#mi-cat").value.trim()||'Other',
+    price:$("#mi-price").value, emoji:$("#mi-emoji").value||'🍽️',
+    image:$("#mi-image").value||null, active:document.getElementById('mi-active').checked };
+  if(!body.name||body.price===''){ toast('Name and price required'); return; }
+  try{
+    if(id) await api('/menu/'+id,{method:'PUT',body:JSON.stringify(body)});
+    else   await api('/menu',{method:'POST',body:JSON.stringify(body)});
+    await loadMenu(); closeModal(); render(); toast(id?'Item updated':'Item added');
+  }catch(e){ toast(e.offline?'📴 Menu edits need a connection':'⚠️ '+e.message); }
+}
+async function toggleAvail(id){
+  const it=_menuItems.find(i=>i.id===id); if(!it)return;
+  try{ await api('/menu/'+id,{method:'PUT',body:JSON.stringify({active:it.active===false})});
+    await loadMenu(); render(); toast(it.active===false?'Back on the menu':'Marked 86’d (out)'); }
+  catch(e){ toast(e.offline?'📴 Needs a connection':'⚠️ '+e.message); }
+}
+async function moveItem(id,dir){
+  const it=_menuItems.find(i=>i.id===id); if(!it)return;
+  const group=_menuItems.filter(i=>i.category===it.category);
+  const idx=group.findIndex(i=>i.id===id); const j=idx+dir;
+  if(j<0||j>=group.length)return;
+  [group[idx],group[j]]=[group[j],group[idx]];
+  // build new global order: keep other categories as-is, replace this group's order
+  const order=[]; const seen=new Set(group.map(g=>g.id));
+  _menuItems.forEach(i=>{ if(!seen.has(i.id)) order.push(i.id); });
+  group.forEach(g=>order.push(g.id));
+  try{ await api('/menu/reorder',{method:'POST',body:JSON.stringify({order})}); await loadMenu(); render(); }
+  catch(e){ toast(e.offline?'📴 Needs a connection':'⚠️ '+e.message); }
+}
+async function delItem(id){
+  if(!confirm('Delete this item permanently?'))return;
+  try{ await api('/menu/'+id,{method:'DELETE'}); await loadMenu(); render(); toast('Item deleted'); }
+  catch(e){ toast(e.offline?'📴 Needs a connection':'⚠️ '+e.message); }
+}
+
+/* ---- TEAM ---- */
+async function teamView(){
+  const staff=await api('/staff').catch(()=>cacheGet('/staff')||[]);
+  const r=await api('/reports/summary').catch(()=>cacheGet('/reports/summary')||{tips:0});
+  return `<div class="grid kpis" style="margin-bottom:16px">
+    <div class="card"><h4>On shift</h4><div class="val">${staff.filter(s=>s.clockedInAt).length}</div></div>
+    <div class="card"><h4>Tip pool</h4><div class="val">${money(r.tips)}</div></div>
+    <div class="card"><h4>Labor %</h4><div class="val">24%</div></div></div>
+    <div class="card"><div class="sec-title">Staff & Time Clock</div><table><thead><tr><th>Name</th><th>Role</th><th>Status</th></tr></thead>
+    <tbody>${staff.map(s=>`<tr><td><b>${s.name}</b></td><td>${s.role}</td><td>${s.clockedInAt?'🟢 Clocked in':'⚪ Off shift'}</td></tr>`).join("")}</tbody></table></div>`;
+}
+
+/* ---- SETTINGS ---- */
+function settingsView(){
+  return `<div class="row2">
+    <div class="card"><div class="sec-title">Payments</div>
+      <p style="font-size:13px;color:var(--mut)">Mode: <b style="color:${CFG.paymentMode==='stripe'?'var(--green)':'var(--amber)'}">${CFG.paymentMode.toUpperCase()}</b></p>
+      <p style="font-size:13px;color:var(--mut);line-height:1.6">${CFG.paymentMode==='stripe'?'Live Stripe test mode — use card 4242 4242 4242 4242.':'Mock processor active. Add Stripe TEST keys in the .env file and restart to take real test cards.'}</p></div>
+    <div class="card"><div class="sec-title">Printing</div>
+      <label style="display:flex;align-items:center;gap:10px;font-size:13px;margin-bottom:10px;cursor:pointer">
+        <input type="checkbox" ${localStorage.getItem('pp_autoprint_ticket')==='1'?'checked':''} onchange="toggleSetting('pp_autoprint_ticket',this.checked)">
+        Auto-print kitchen ticket when an order is sent</label>
+      <label style="display:flex;align-items:center;gap:10px;font-size:13px;cursor:pointer">
+        <input type="checkbox" ${localStorage.getItem('pp_autoprint_receipt')==='1'?'checked':''} onchange="toggleSetting('pp_autoprint_receipt',this.checked)">
+        Auto-print customer receipt after payment</label>
+      <p style="font-size:12px;color:var(--mut);margin-top:10px">Uses your browser's print dialog — choose a receipt printer or save as PDF. Receipts are sized for an 80mm roll.</p></div>
+    <div class="card"><div class="sec-title">Hardware</div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <div class="pill" style="display:flex;justify-content:space-between"><span>💳 Card terminal</span><b style="color:var(--green)">Connected</b></div>
+        <div class="pill" style="display:flex;justify-content:space-between"><span>🖨️ Kitchen printer</span><b style="color:var(--green)">Online</b></div>
+        <div class="pill" style="display:flex;justify-content:space-between"><span>📱 KDS screen</span><b style="color:var(--green)">Paired</b></div></div></div>
+    <div class="card"><div class="sec-title">About</div><p style="font-size:13px;color:var(--mut);line-height:1.6">PlatePoint POS — full-stack Toast-style point of sale. Backend: Node/Express + JSON store + Stripe. Replace the JSON store with Postgres and go live when ready.</p></div></div>`;
+}
+
+/* ---- LOGIN ---- */
+let pinBuf='';
+function loginScreen(){
+  $("#app").style.display='none';
+  let scr=document.getElementById('loginScreen');
+  if(!scr){scr=document.createElement('div');scr.id='loginScreen';document.body.appendChild(scr);}
+  scr.style.cssText='position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:var(--bg);z-index:200';
+  const keys=[1,2,3,4,5,6,7,8,9,'C',0,'⏎'];
+  scr.innerHTML=`<div style="text-align:center;width:300px">
+    <div class="logo" style="margin:0 auto 14px;width:60px;height:60px;font-size:26px">P</div>
+    <h2 style="margin:0 0 4px">PlatePoint POS</h2>
+    <p style="color:var(--mut);font-size:13px;margin:0 0 18px">Enter your PIN to clock in</p>
+    <div id="pinDots" style="display:flex;gap:12px;justify-content:center;margin-bottom:6px;height:20px"></div>
+    <div id="pinErr" style="color:var(--red);font-size:12px;min-height:16px;margin-bottom:10px"></div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+      ${keys.map(k=>`<button onclick="pinKey('${k}')" style="padding:18px;font-size:20px;font-weight:700;border-radius:14px;background:var(--panel2);border:1px solid var(--line);color:var(--txt)">${k}</button>`).join("")}
+    </div>
+    <p style="color:var(--mut);font-size:11px;margin-top:18px;line-height:1.6">Demo PINs · Manager <b>1234</b> · Server <b>1111</b> · Kitchen <b>3333</b></p>
+  </div>`;
+  drawPin();
+}
+function drawPin(){const d=document.getElementById('pinDots');if(d)d.innerHTML=pinBuf.split('').map(()=>'<span style="width:14px;height:14px;border-radius:50%;background:var(--brand);display:inline-block"></span>').join('')||'<span style="color:var(--mut);font-size:12px">····</span>'}
+function pinKey(k){
+  if(k==='C'){pinBuf='';drawPin();return}
+  if(k==='⏎'){submitPin();return}
+  if(pinBuf.length<6){pinBuf+=k;drawPin();if(pinBuf.length>=4){/* allow enter */}}
+}
+async function submitPin(){
+  try{
+    const res=await api('/auth/login',{method:'POST',body:JSON.stringify({pin:pinBuf})});
+    TOKEN=res.token;ME=res.user;localStorage.setItem('pp_token',TOKEN);
+    pinBuf='';const scr=document.getElementById('loginScreen');if(scr)scr.remove();
+    $("#app").style.display='flex';
+    await startApp();
+  }catch(e){pinBuf='';drawPin();const er=document.getElementById('pinErr');if(er)er.textContent=e.message}
+}
+function logout(silent){TOKEN=null;ME=null;localStorage.removeItem('pp_token');route='pos';if(!silent)toast('Logged out');loginScreen();}
+
+/* ---- BOOT ---- */
+function tickClock(){$("#clock").textContent=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}
+async function loadMenu(){MENU=await api('/menu').catch(()=>cacheGet('/menu')||[]);CATS=[...new Set(MENU.map(m=>m.category))];if(!activeCat)activeCat=CATS[0]||''}
+async function startApp(){
+  try{CFG=await api('/config')}catch{}
+  $("#modebadge").textContent=(CFG.paymentMode==='stripe'?'💳 Stripe test':'🧪 Mock pay')+(ME?` · ${ME.name} (${ME.role})`:'');
+  // ensure default route is allowed for this role
+  if(!((ME&&ME.routes)||[]).includes(route)) route=(ME.routes&&ME.routes[0])||'pos';
+  await loadMenu();tickClock();
+  if(!window._clockIv) window._clockIv=setInterval(()=>{tickClock();if(route==='kds')render()},30000);
+  updateConn();
+  if(OUTBOX.length) flushOutbox();   // sync anything queued from a previous offline session
+  renderNav();render();
+}
+async function boot(){
+  if(!TOKEN){loginScreen();return}
+  try{ ME=await api('/auth/me'); await startApp(); }
+  catch{ logout(true); }
+}
+boot();
+</script>
+</body>
+</html>
