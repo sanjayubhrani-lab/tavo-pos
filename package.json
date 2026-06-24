@@ -9,7 +9,7 @@
     "dev": "node --watch src/server.js",
     "migrate": "node src/migrate.js",
     "seed": "node src/seed.js",
-    "test": "node test/store.test.mjs && node test/api.test.mjs",
+    "test": "node test/store.test.mjs && node test/gateways.test.mjs && node test/api.test.mjs",
     "mobile:build": "rm -rf www && cp -r public www",
     "mobile:sync": "npm run mobile:build && npx cap sync",
     "mobile:ios": "npm run mobile:sync && npx cap open ios",
