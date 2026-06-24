@@ -38,6 +38,7 @@ export function makeJsonStore() {
     },
     async countOrders() { return read().orders.length; },
     async getOrder(id) { return read().orders.find(o => o.id === id) || null; },
+    async findOrderByExternalId(externalId) { return read().orders.find(o => o.externalId === externalId) || null; },
     async createOrder(order) { const db = read(); db.orders.push(order); write(db); return order; },
     async updateOrder(id, patch) {
       const db = read(); const o = db.orders.find(x => x.id === id);

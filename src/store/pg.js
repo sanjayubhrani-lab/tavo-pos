@@ -15,6 +15,7 @@ const mTable = r => ({ number: num(r.number), status: r.status, orderId: r.order
 const mOrder = r => ({ id: r.id, number: num(r.number), table: r.table_no == null ? null : num(r.table_no),
   lines: r.lines, subtotal: num(r.subtotal), tax: num(r.tax), total: num(r.total),
   status: r.status, voidReason: r.void_reason ?? null,
+  channel: r.channel ?? 'pos', platform: r.platform ?? null, customer: r.customer ?? null, externalId: r.external_id ?? null,
   createdAt: num(r.created_at), firedAt: r.fired_at == null ? undefined : num(r.fired_at) });
 const mPay = r => ({ id: r.id, orderId: r.order_id, table: r.table_no == null ? null : num(r.table_no),
   lines: r.lines, subtotal: num(r.subtotal), tax: num(r.tax), tip: num(r.tip), total: num(r.total),
@@ -50,6 +51,10 @@ export async function makePgStore(poolOverride) {
         'ALTER TABLE orders ADD COLUMN void_reason TEXT',
         'ALTER TABLE menu ADD COLUMN image TEXT',
         'ALTER TABLE menu ADD COLUMN sort_order INTEGER DEFAULT 0',
+        "ALTER TABLE orders ADD COLUMN channel TEXT DEFAULT 'pos'",
+        'ALTER TABLE orders ADD COLUMN platform TEXT',
+        'ALTER TABLE orders ADD COLUMN customer TEXT',
+        'ALTER TABLE orders ADD COLUMN external_id TEXT',
       ];
       for (const u of upgrades) { try { await q(u); } catch { /* column already present */ } }
     },
@@ -99,10 +104,12 @@ export async function makePgStore(poolOverride) {
     },
     async countOrders() { return Number((await q('SELECT COUNT(*) AS c FROM orders')).rows[0].c); },
     async getOrder(id) { const r = (await q('SELECT * FROM orders WHERE id=$1', [id])).rows[0]; return r ? mOrder(r) : null; },
+    async findOrderByExternalId(externalId) { const r = (await q('SELECT * FROM orders WHERE external_id=$1', [externalId])).rows[0]; return r ? mOrder(r) : null; },
     async createOrder(o) {
-      await q(`INSERT INTO orders(id,number,table_no,lines,subtotal,tax,total,status,created_at,fired_at)
-               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-        [o.id, o.number, o.table, JSON.stringify(o.lines), o.subtotal, o.tax, o.total, o.status, o.createdAt, o.firedAt ?? null]);
+      await q(`INSERT INTO orders(id,number,table_no,lines,subtotal,tax,total,status,channel,platform,customer,external_id,created_at,fired_at)
+               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+        [o.id, o.number, o.table, JSON.stringify(o.lines), o.subtotal, o.tax, o.total, o.status,
+         o.channel ?? 'pos', o.platform ?? null, o.customer ?? null, o.externalId ?? null, o.createdAt, o.firedAt ?? null]);
       return o;
     },
     async updateOrder(id, patch) {
