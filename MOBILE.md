@@ -15,12 +15,16 @@ and Google Play ($25 one-time).
 
 ```bash
 cd platepoint
-npm install                      # installs Capacitor (in devDependencies)
-npx cap init Tavo com.tavo.pos   # already configured in capacitor.config.json; safe to skip
+npm install                      # server deps
+# install Capacitor locally (kept out of the server's package.json so the
+# hosted backend deploys without native build tools):
+npm i -D @capacitor/cli @capacitor/core @capacitor/ios @capacitor/android
 npm run mobile:build             # copies the web app into www/
 npx cap add ios                  # creates the ios/ Xcode project   (Mac only)
 npx cap add android              # creates the android/ Studio project
 ```
+
+> `capacitor.config.json` is already set up (appId `com.tavo.pos`, appName `Tavo`), so `npx cap init` is not needed.
 
 ## Generate app icons & splash (uses resources/icon.svg)
 
