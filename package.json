@@ -1,7 +1,7 @@
 {
-  "name": "platepoint-pos",
+  "name": "tavo-pos",
   "version": "0.1.0",
-  "description": "PlatePoint POS — a Toast-style restaurant point-of-sale (backend + frontend) with Stripe test-mode payments.",
+  "description": "Tavo POS — a Toast-style restaurant point-of-sale (backend + frontend) with Stripe test-mode payments.",
   "type": "module",
   "main": "src/server.js",
   "scripts": {
@@ -9,7 +9,11 @@
     "dev": "node --watch src/server.js",
     "migrate": "node src/migrate.js",
     "seed": "node src/seed.js",
-    "test": "node test/store.test.mjs && node test/api.test.mjs"
+    "test": "node test/store.test.mjs && node test/api.test.mjs",
+    "mobile:build": "rm -rf www && cp -r public www",
+    "mobile:sync": "npm run mobile:build && npx cap sync",
+    "mobile:ios": "npm run mobile:sync && npx cap open ios",
+    "mobile:android": "npm run mobile:sync && npx cap open android"
   },
   "engines": { "node": ">=18" },
   "dependencies": {
@@ -23,6 +27,11 @@
     "pg": "^8.12.0"
   },
   "devDependencies": {
-    "pg-mem": "^3.0.2"
+    "pg-mem": "^3.0.2",
+    "@capacitor/cli": "^6.1.2",
+    "@capacitor/core": "^6.1.2",
+    "@capacitor/ios": "^6.1.2",
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/assets": "^3.0.5"
   }
 }

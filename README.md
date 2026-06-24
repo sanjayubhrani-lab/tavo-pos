@@ -1,4 +1,4 @@
-# PlatePoint POS
+# Tavo POS
 
 A full-stack, Toast-style restaurant point-of-sale you can run on your own computer and grow into a real product.
 
@@ -139,7 +139,7 @@ With Docker installed:
 docker compose up --build
 ```
 
-This starts PlatePoint **and** a PostgreSQL database together, wires them up, migrates, and seeds. Open http://localhost:4242. Data persists in a Docker volume (`pgdata`). Edit `JWT_SECRET` and the Stripe keys in `docker-compose.yml` before using it for real.
+This starts Tavo **and** a PostgreSQL database together, wires them up, migrates, and seeds. Open http://localhost:4242. Data persists in a Docker volume (`pgdata`). Edit `JWT_SECRET` and the Stripe keys in `docker-compose.yml` before using it for real.
 
 ### Option B — Render.com (managed hosting + HTTPS, free tier)
 
@@ -177,7 +177,7 @@ Both the customer receipt and the kitchen ticket print through the browser's pri
 
 ## Offline mode
 
-Restaurants can't stop taking orders when the WiFi drops. PlatePoint keeps working offline:
+Restaurants can't stop taking orders when the WiFi drops. Tavo keeps working offline:
 
 - **Detects** lost connectivity automatically (the top-bar badge turns to `📴 Offline`).
 - **Keeps serving:** staff can still browse the menu, build checks, send orders to the kitchen, and take **cash** payments. Queued kitchen tickets show a `⏳ Queued` tag.

@@ -1,4 +1,4 @@
-# Getting PlatePoint Live — Step by Step
+# Getting Tavo Live — Step by Step
 
 A plain-language guide to putting your POS online with a real web address, a real database, and real card payments. No prior server experience needed. Budget about 30–45 minutes.
 
@@ -27,7 +27,7 @@ You can sign up for all three with just an email.
    ```bash
    git init
    git add .
-   git commit -m "PlatePoint POS"
+   git commit -m "Tavo POS"
    ```
 
 3. On GitHub, click **New repository**, name it `platepoint`, leave it **Private**, and click **Create repository**.
@@ -47,7 +47,7 @@ You can sign up for all three with just an email.
 
 ## Part 2 — Deploy on Render
 
-PlatePoint includes a `render.yaml` blueprint, so Render sets up **both** the app and a PostgreSQL database automatically.
+Tavo includes a `render.yaml` blueprint, so Render sets up **both** the app and a PostgreSQL database automatically.
 
 1. Go to the Render dashboard → **New** → **Blueprint**.
 2. Click **Connect GitHub**, authorize Render, and pick your `platepoint` repository.
