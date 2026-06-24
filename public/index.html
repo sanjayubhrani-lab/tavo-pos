@@ -122,8 +122,8 @@
 
 <script>
 // API base: same-origin on the web; the hosted backend when running as a native
-// (Capacitor) app. Change BACKEND_URL if you rename your Render service.
-const BACKEND_URL = 'https://platepoint.onrender.com';
+// (Capacitor) app. This is your branded custom domain on Render.
+const BACKEND_URL = 'https://app.tavopoint.com';
 const IS_NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())
   || location.protocol === 'capacitor:' || location.protocol === 'file:';
 const API = IS_NATIVE ? BACKEND_URL : '';  // same origin on web, hosted backend on mobile
@@ -276,16 +276,59 @@ function checkPanel(){
     ${check.length?`<div style="padding:0 12px 12px"><button class="btn ghost" style="width:100%" onclick="clearCheck()">Clear</button></div>`:""}</div>`;
 }
 function setCat(c){activeCat=c;render()}
-function addItem(id){const it=MENU.find(m=>m.id===id);const ex=check.find(l=>l.id===id&&(!l.mods||!l.mods.length));
+function addItem(id){const it=MENU.find(m=>m.id===id);
+  if(it.modifierGroups&&it.modifierGroups.length){ openModifierPicker(it,null); return; }
+  const ex=check.find(l=>l.id===id&&(!l.mods||!l.mods.length));
   if(ex)ex.qty++;else check.push({id,name:it.name,price:it.price,qty:1,mods:[]});render()}
 function chgQty(i,d){check[i].qty+=d;if(check[i].qty<=0)check.splice(i,1);render()}
 function rmLine(i){check.splice(i,1);render()}
 function clearCheck(){check=[];tableNo=null;render()}
-function editMods(i){const sel=new Set(check[i].mods||[]);
+function editMods(i){const it=MENU.find(m=>m.id===check[i].id);
+  if(it&&it.modifierGroups&&it.modifierGroups.length){ openModifierPicker(it,i); return; }
+  const sel=new Set(check[i].mods||[]);
   const chips=MODIFIERS.map(m=>`<button class="chip ${sel.has(m)?'sel':''}" data-m="${m}" onclick="this.classList.toggle('sel')">${m}</button>`).join("");
   openModal(`<div class="mhd"><h3>Modify · ${check[i].name}</h3><button class="x" onclick="closeModal()">✕</button></div>
     <div class="mbd"><div class="modrow">${chips}</div><button class="btn primary" onclick="saveMods(${i})">Save</button></div>`)}
 function saveMods(i){check[i].mods=[...document.querySelectorAll('.modrow .chip.sel')].map(c=>c.dataset.m);closeModal();render()}
+
+/* ---- grouped modifier picker (Toast/Square-style: required/optional, min/max, pricing) ---- */
+let _mp=null;
+function openModifierPicker(it,lineIndex){
+  const sel={}; (it.modifierGroups||[]).forEach(g=>sel[g.id]=new Set());
+  if(lineIndex!=null && check[lineIndex]){
+    const have=(check[lineIndex].mods||[]).map(m=>m.replace(/\s*\(\+\$[0-9.]+\)$/,''));
+    (it.modifierGroups||[]).forEach(g=>g.options.forEach(o=>{ if(have.includes(o.name)) sel[g.id].add(o.name); }));
+  }
+  _mp={it,lineIndex,sel}; renderModifierPicker();
+}
+function toggleOpt(gid,name){
+  const g=_mp.it.modifierGroups.find(x=>x.id===gid); const s=_mp.sel[gid]; const single=(g.max||0)===1;
+  if(single){ s.clear(); s.add(name); }
+  else if(s.has(name)) s.delete(name);
+  else { if(g.max && s.size>=g.max){ toast('Up to '+g.max+' for '+g.name); return; } s.add(name); }
+  renderModifierPicker();
+}
+function _mpExtra(){ let e=0; _mp.it.modifierGroups.forEach(g=>g.options.forEach(o=>{ if(_mp.sel[g.id].has(o.name)) e+=o.price||0; })); return e; }
+function renderModifierPicker(){
+  const it=_mp.it;
+  const groups=it.modifierGroups.map(g=>{const s=_mp.sel[g.id];
+    const tag=g.required?'<span class="tag red" style="font-size:10px">Required</span>'
+      :`<span class="tag" style="font-size:10px;background:var(--panel2);color:var(--mut)">Optional${g.max?` · up to ${g.max}`:''}</span>`;
+    const opts=g.options.map(o=>`<button class="chip ${s.has(o.name)?'sel':''}" onclick="toggleOpt('${g.id}','${(o.name||'').replace(/'/g,"\\'")}')">${o.name}${o.price?` +$${(o.price).toFixed(2)}`:''}</button>`).join('');
+    return `<div style="margin-bottom:14px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b style="font-size:13px">${g.name}</b>${tag}</div><div class="modrow" style="margin:0">${opts}</div></div>`;
+  }).join('');
+  openModal(`<div class="mhd"><h3>${it.emoji||''} ${it.name}</h3><button class="x" onclick="closeModal()">✕</button></div>
+    <div class="mbd">${groups}<button class="btn primary" onclick="commitMods()">${_mp.lineIndex!=null?'Update':'Add'} · ${money(it.price+_mpExtra())}</button></div>`);
+}
+function commitMods(){
+  for(const g of _mp.it.modifierGroups){ const n=_mp.sel[g.id].size;
+    if(g.required && n<(g.min||1)){ toast('Choose '+(g.min||1)+' for '+g.name); return; }
+    if(g.min && n<g.min){ toast('Choose at least '+g.min+' for '+g.name); return; } }
+  const mods=[]; _mp.it.modifierGroups.forEach(g=>g.options.forEach(o=>{ if(_mp.sel[g.id].has(o.name)) mods.push(o.price?`${o.name} (+$${o.price.toFixed(2)})`:o.name); }));
+  if(_mp.lineIndex!=null && check[_mp.lineIndex]) check[_mp.lineIndex].mods=mods;
+  else check.push({id:_mp.it.id,name:_mp.it.name,price:_mp.it.price,qty:1,mods});
+  _mp=null; closeModal(); render();
+}
 function assignTable(){let o="";for(let n=1;n<=12;n++)o+=`<button class="chip ${tableNo===n?'sel':''}" onclick="setTable(${n})">T${n}</button>`;
   openModal(`<div class="mhd"><h3>Assign Table</h3><button class="x" onclick="closeModal()">✕</button></div>
     <div class="mbd"><div class="modrow">${o}</div><button class="chip" onclick="setTable(null)">Takeout</button></div>`)}
@@ -650,8 +693,10 @@ async function menuView(){
       <button class="btn primary" style="flex:0;padding:10px 18px" onclick="editItem()">+ Add item</button></div>
     ${sections||'<div class="empty">No items yet.</div>'}`;
 }
+let _editMods=[];
 function itemForm(it){
   it=it||{name:'',category:activeCat||'Mains',price:'',emoji:'🍽️',image:'',active:true};
+  _editMods=JSON.parse(JSON.stringify(it.modifierGroups||[]));
   const cats=[...new Set(_menuItems.map(i=>i.category))];
   openModal(`<div class="mhd"><h3>${it.id?'Edit':'Add'} Menu Item</h3><button class="x" onclick="closeModal()">✕</button></div><div class="mbd">
     <div style="display:flex;gap:14px;align-items:center;margin-bottom:14px">
@@ -668,10 +713,37 @@ function itemForm(it){
       <div class="fld"><label>Price ($)</label><input id="mi-price" type="number" step="0.01" value="${it.price}"></div>
     </div>
     <div class="fld"><label>Emoji (fallback when no photo)</label><input id="mi-emoji" value="${it.emoji||'🍽️'}"></div>
-    <label style="display:flex;align-items:center;gap:10px;font-size:13px;margin:6px 0 16px;cursor:pointer">
+    <label style="display:flex;align-items:center;gap:10px;font-size:13px;margin:6px 0 14px;cursor:pointer">
       <input type="checkbox" id="mi-active" ${it.active!==false?'checked':''}> Available for ordering</label>
-    <button class="btn primary" onclick="saveItem('${it.id||''}')">${it.id?'Save changes':'Add item'}</button></div>`);
+    <div style="display:flex;justify-content:space-between;align-items:center;margin:4px 0 8px">
+      <b style="font-size:13px">Modifier groups</b>
+      <button class="chip" onclick="addModGroup()">+ Add group</button></div>
+    <div id="modGroupsBox"></div>
+    <button class="btn primary" style="margin-top:8px" onclick="saveItem('${it.id||''}')">${it.id?'Save changes':'Add item'}</button></div>`);
+  renderModGroups();
 }
+function renderModGroups(){
+  const box=document.getElementById('modGroupsBox'); if(!box)return;
+  const ip='padding:7px 9px;border-radius:8px;background:var(--panel);border:1px solid var(--line);color:var(--txt)';
+  box.innerHTML=_editMods.map((g,gi)=>`
+    <div class="card" style="padding:10px;margin-bottom:8px;background:var(--panel2)">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+        <input value="${(g.name||'').replace(/"/g,'&quot;')}" placeholder="Group (e.g. Size)" oninput="_editMods[${gi}].name=this.value" style="flex:1;${ip}">
+        <label style="font-size:12px;display:flex;align-items:center;gap:4px;white-space:nowrap"><input type="checkbox" ${g.required?'checked':''} onchange="_editMods[${gi}].required=this.checked">Req</label>
+        <input type="number" min="0" value="${g.max||0}" title="max choices (0 = unlimited)" oninput="_editMods[${gi}].max=+this.value" style="width:50px;${ip}">
+        <button class="chip" style="color:var(--red)" onclick="removeModGroup(${gi})">✕</button>
+      </div>
+      ${(g.options||[]).map((o,oi)=>`<div style="display:flex;gap:6px;margin:4px 0 4px 12px">
+        <input value="${(o.name||'').replace(/"/g,'&quot;')}" placeholder="Option" oninput="_editMods[${gi}].options[${oi}].name=this.value" style="flex:1;${ip}">
+        <input type="number" step="0.01" value="${o.price||0}" placeholder="+$" oninput="_editMods[${gi}].options[${oi}].price=+this.value" style="width:78px;${ip}">
+        <button class="chip" style="color:var(--red)" onclick="removeModOption(${gi},${oi})">−</button></div>`).join('')}
+      <button class="chip" style="margin-left:12px" onclick="addModOption(${gi})">+ option</button>
+    </div>`).join('')||'<div style="color:var(--mut);font-size:12px;margin-bottom:8px">No groups yet. Add one to give this item choices (size, add-ons, temperature…).</div>';
+}
+function addModGroup(){ _editMods.push({id:'g'+Date.now(),name:'',required:false,min:0,max:0,options:[{name:'',price:0}]}); renderModGroups(); }
+function removeModGroup(gi){ _editMods.splice(gi,1); renderModGroups(); }
+function addModOption(gi){ (_editMods[gi].options=_editMods[gi].options||[]).push({name:'',price:0}); renderModGroups(); }
+function removeModOption(gi,oi){ _editMods[gi].options.splice(oi,1); renderModGroups(); }
 function editItem(id){ itemForm(id?_menuItems.find(i=>i.id===id):null); }
 function previewImg(url){ const p=document.getElementById('imgPreview'); if(!p)return; if(url){p.style.backgroundImage=`url('${url}')`;p.style.backgroundSize='cover';p.style.backgroundPosition='center';p.textContent='';} else {p.style.backgroundImage='';p.textContent=document.getElementById('mi-emoji').value||'🍽️';} }
 function fileToImg(input){
@@ -682,9 +754,13 @@ function fileToImg(input){
   reader.readAsDataURL(f);
 }
 async function saveItem(id){
+  const groups=_editMods.filter(g=>g.name&&(g.options||[]).filter(o=>o.name).length).map(g=>({
+    id:g.id||('g'+Math.random().toString(36).slice(2,6)), name:g.name, required:!!g.required,
+    min:g.required?(g.min||1):(g.min||0), max:+g.max||0,
+    options:(g.options||[]).filter(o=>o.name).map(o=>({name:o.name,price:+o.price||0})) }));
   const body={ name:$("#mi-name").value.trim(), category:$("#mi-cat").value.trim()||'Other',
     price:$("#mi-price").value, emoji:$("#mi-emoji").value||'🍽️',
-    image:$("#mi-image").value||null, active:document.getElementById('mi-active').checked };
+    image:$("#mi-image").value||null, modifierGroups:groups, active:document.getElementById('mi-active').checked };
   if(!body.name||body.price===''){ toast('Name and price required'); return; }
   try{
     if(id) await api('/menu/'+id,{method:'PUT',body:JSON.stringify(body)});
@@ -794,7 +870,8 @@ function tickClock(){$("#clock").textContent=new Date().toLocaleTimeString([],{h
 async function loadMenu(){MENU=await api('/menu').catch(()=>cacheGet('/menu')||[]);CATS=[...new Set(MENU.map(m=>m.category))];if(!activeCat)activeCat=CATS[0]||''}
 async function startApp(){
   try{CFG=await api('/config')}catch{}
-  $("#modebadge").textContent=(CFG.paymentMode==='stripe'?'💳 Stripe test':'🧪 Mock pay')+(ME?` · ${ME.name} (${ME.role})`:'');
+  const GW={stripe:'💳 Stripe',fiserv:'💳 Fiserv',tsys:'💳 TSYS',mock:'🧪 Mock pay'};
+  $("#modebadge").textContent=(GW[CFG.paymentMode]||('💳 '+CFG.paymentMode))+(ME?` · ${ME.name} (${ME.role})`:'');
   // ensure default route is allowed for this role
   if(!((ME&&ME.routes)||[]).includes(route)) route=(ME.routes&&ME.routes[0])||'pos';
   await loadMenu();tickClock();
