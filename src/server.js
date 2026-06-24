@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 import { nanoid } from 'nanoid';
 import { getStore, storeKind } from './store/index.js';
 import { buildSeedData } from './seedData.js';
-import { createPaymentIntent, retrieveStatus, createRefund, usingStripe, stripeClient } from './payments.js';
+import { createPaymentIntent, retrieveStatus, createRefund, usingStripe, stripeClient, paymentGateway, publishableKey } from './payments.js';
 import { verifyPin, issueToken, requireAuth, requireRole, ROLE_ROUTES } from './auth.js';
 import { normalizeIncoming, exportMenu } from './integrations.js';
 
@@ -73,11 +73,11 @@ function priceLines(lines) {
 
 // ---- config / health ----
 app.get('/api/health', (req, res) =>
-  res.json({ ok: true, paymentMode: usingStripe ? 'stripe' : 'mock', taxRate: TAX_RATE, db: storeKind() }));
+  res.json({ ok: true, paymentMode: paymentGateway, taxRate: TAX_RATE, db: storeKind() }));
 
 app.get('/api/config', (req, res) => res.json({
-  publishableKey: process.env.STRIPE_PUBLISHABLE_KEY || null,
-  paymentMode: usingStripe ? 'stripe' : 'mock',
+  publishableKey: publishableKey(),
+  paymentMode: paymentGateway,
   taxRate: TAX_RATE,
 }));
 
@@ -99,13 +99,14 @@ app.get('/api/auth/me', requireAuth, (req, res) =>
 app.get('/api/menu', requireAuth, h(async (req, res) => res.json(await store.listMenu())));
 
 app.post('/api/menu', requireAuth, requireRole('manager'), h(async (req, res) => {
-  const { category, name, price, emoji, image, sortOrder } = req.body;
+  const { category, name, price, emoji, image, sortOrder, modifierGroups } = req.body;
   if (!name || price == null) return res.status(400).json({ error: 'name and price required' });
   const existing = await store.listMenu();
   const item = {
     id: nanoid(8), category: category || 'Other', name, price: Number(price),
     emoji: emoji || '🍽️', image: image || null,
     sortOrder: sortOrder != null ? Number(sortOrder) : existing.length,
+    modifierGroups: Array.isArray(modifierGroups) ? modifierGroups : [],
     active: true,
   };
   await store.createMenuItem(item);

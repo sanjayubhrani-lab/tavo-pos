@@ -13,8 +13,30 @@ const USERS_SEED = [
 ];
 
 export function buildSeedData() {
+  // Example modifier groups (required/optional, min/max, per-option pricing) so the
+  // menu shows the professional model out of the box. Keyed by item name.
+  const grp = (name, required, min, max, options) => ({ id: nanoid(6), name, required, min, max, options });
+  const MODS_BY_NAME = {
+    'Classic Cheeseburger': [
+      grp('Temperature', true, 1, 1, [{ name: 'Rare', price: 0 }, { name: 'Medium', price: 0 }, { name: 'Well done', price: 0 }]),
+      grp('Add-ons', false, 0, 4, [{ name: 'Bacon', price: 2 }, { name: 'Extra cheese', price: 1.5 }, { name: 'Avocado', price: 2 }, { name: 'Fried egg', price: 1.5 }]),
+      grp('Remove', false, 0, 3, [{ name: 'No onions', price: 0 }, { name: 'No pickles', price: 0 }, { name: 'No sauce', price: 0 }]),
+    ],
+    'Bacon BBQ Burger': [
+      grp('Temperature', true, 1, 1, [{ name: 'Rare', price: 0 }, { name: 'Medium', price: 0 }, { name: 'Well done', price: 0 }]),
+      grp('Add-ons', false, 0, 3, [{ name: 'Extra bacon', price: 2.5 }, { name: 'Jalapeños', price: 1 }, { name: 'Onion rings', price: 2 }]),
+    ],
+    'Margherita': [grp('Size', true, 1, 1, [{ name: '10"', price: 0 }, { name: '14"', price: 4 }, { name: '18"', price: 8 }])],
+    'Pepperoni': [grp('Size', true, 1, 1, [{ name: '10"', price: 0 }, { name: '14"', price: 4 }, { name: '18"', price: 8 }]),
+      grp('Extra toppings', false, 0, 5, [{ name: 'Extra cheese', price: 2 }, { name: 'Mushrooms', price: 1.5 }, { name: 'Olives', price: 1.5 }])],
+    'Soft Drink': [grp('Size', true, 1, 1, [{ name: 'Small', price: 0 }, { name: 'Medium', price: 0.75 }, { name: 'Large', price: 1.25 }]),
+      grp('Ice', false, 0, 1, [{ name: 'No ice', price: 0 }, { name: 'Light ice', price: 0 }])],
+    'Coffee': [grp('Milk', false, 0, 1, [{ name: 'Oat milk', price: 0.6 }, { name: 'Almond milk', price: 0.6 }, { name: 'Whole milk', price: 0 }]),
+      grp('Extras', false, 0, 3, [{ name: 'Extra shot', price: 0.9 }, { name: 'Vanilla', price: 0.5 }, { name: 'Caramel', price: 0.5 }])],
+  };
   const menu = MENU_SEED.map(([category, name, price, emoji], i) => ({
-    id: nanoid(8), category, name, price, emoji, image: null, sortOrder: i, active: true,
+    id: nanoid(8), category, name, price, emoji, image: null, sortOrder: i,
+    modifierGroups: MODS_BY_NAME[name] || [], active: true,
   }));
   const tables = Array.from({ length: 12 }, (_, i) => ({
     number: i + 1, status: 'open', orderId: null,

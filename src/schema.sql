@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS menu (
   emoji      TEXT,
   image      TEXT,
   sort_order INTEGER DEFAULT 0,
+  modifier_groups JSONB DEFAULT '[]',
   active     BOOLEAN DEFAULT TRUE
 );
 
