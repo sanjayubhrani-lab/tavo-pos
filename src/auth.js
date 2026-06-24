@@ -8,9 +8,9 @@ const TOKEN_TTL = '12h';
 
 // What each role is allowed to do (used by both API guards and the UI).
 export const ROLE_ROUTES = {
-  manager: ['pos', 'floor', 'kds', 'dash', 'menu', 'team', 'settings'],
-  server:  ['pos', 'floor', 'kds'],
-  kitchen: ['kds'],
+  manager: ['pos', 'floor', 'kds', 'online', 'dash', 'menu', 'team', 'settings'],
+  server:  ['pos', 'floor', 'kds', 'online'],
+  kitchen: ['kds', 'online'],
 };
 
 export function hashPin(pin) {

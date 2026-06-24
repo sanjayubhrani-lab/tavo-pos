@@ -8,6 +8,7 @@ import { getStore, storeKind } from './store/index.js';
 import { buildSeedData } from './seedData.js';
 import { createPaymentIntent, retrieveStatus, createRefund, usingStripe, stripeClient } from './payments.js';
 import { verifyPin, issueToken, requireAuth, requireRole, ROLE_ROUTES } from './auth.js';
+import { normalizeIncoming, exportMenu } from './integrations.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -237,6 +238,65 @@ app.get('/api/reports/summary', requireAuth, requireRole('manager'), h(async (re
   res.json({ gross, refunds, net, tips, tax, orders, avgCheck, byMethod, topSellers, openChecks });
 }));
 
+// ---- delivery-platform integrations (DoorDash / Uber Eats / Grubhub / aggregators) ----
+function requireIntegrationKey(req, res, next) {
+  const key = process.env.INTEGRATION_API_KEY;
+  if (!key) return res.status(503).json({ error: 'integrations not configured — set INTEGRATION_API_KEY' });
+  if (req.headers['x-integration-key'] !== key) return res.status(401).json({ error: 'invalid integration key' });
+  next();
+}
+
+// Shared: turn a normalized incoming order into a live Tavo order (+ payment for reporting).
+async function createDeliveryOrder(norm) {
+  if (norm.externalId) {
+    const existing = await store.findOrderByExternalId(norm.externalId);
+    if (existing) return { order: existing, duplicate: true };   // idempotent
+  }
+  const totals = priceLines(norm.lines);
+  const count = await store.countOrders();
+  const order = {
+    id: nanoid(10), number: 1000 + count + 1, table: null, lines: norm.lines, ...totals,
+    status: 'cooking', channel: 'delivery', platform: norm.platform, customer: norm.customer,
+    externalId: norm.externalId, createdAt: Date.now(), firedAt: Date.now(),
+  };
+  await store.createOrder(order);
+  // The platform already collected payment from the customer — record it so it shows in sales/reports by platform.
+  await store.createPayment({
+    id: nanoid(10), orderId: order.id, table: null, lines: norm.lines, ...totals,
+    tip: 0, total: totals.total, method: norm.platform, status: 'succeeded', stripeId: null,
+    confirmed: true, refundedAmount: 0, refundedAt: null, createdAt: Date.now(),
+  });
+  return { order, duplicate: false };
+}
+
+// Webhook: external platforms / aggregators POST incoming orders here.
+app.post('/api/integrations/orders', requireIntegrationKey, h(async (req, res) => {
+  let norm;
+  try { norm = normalizeIncoming(req.body); } catch (e) { return res.status(400).json({ error: e.message }); }
+  const { order, duplicate } = await createDeliveryOrder(norm);
+  res.status(duplicate ? 200 : 201).json({ received: true, duplicate, order });
+}));
+
+// Menu export for pushing to platforms/aggregators.
+app.get('/api/integrations/menu', requireIntegrationKey, h(async (req, res) =>
+  res.json(exportMenu(await store.listMenu()))));
+
+// Sandbox: a logged-in manager can simulate an incoming delivery order (no key needed).
+app.post('/api/integrations/simulate', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const platform = String(req.body.platform || 'doordash');
+  const menu = (await store.listMenu()).filter(m => m.active !== false);
+  if (!menu.length) return res.status(400).json({ error: 'no menu items to build a test order' });
+  const pick = () => menu[Math.floor(Math.random() * menu.length)];
+  const lines = [pick(), pick()].map(it => ({ name: it.name, price: it.price, qty: 1 + Math.floor(Math.random() * 2), mods: [] }));
+  const names = ['Alex R.', 'Sam P.', 'Jordan L.', 'Riley C.', 'Casey W.', 'Morgan D.'];
+  const norm = {
+    platform, externalId: platform + '_' + Date.now(),
+    customer: names[Math.floor(Math.random() * names.length)] + ' (delivery)', lines,
+  };
+  const { order } = await createDeliveryOrder(norm);
+  res.status(201).json({ simulated: true, order });
+}));
+
 // ---- Z report (end-of-day close-out) ----
 app.get('/api/reports/zreport', requireAuth, requireRole('manager'), h(async (req, res) => {
   const d = req.query.date ? new Date(req.query.date + 'T00:00:00') : new Date();
@@ -292,7 +352,7 @@ async function start() {
     }
   }
   app.listen(PORT, () => {
-    console.log(`\n  PlatePoint POS running → http://localhost:${PORT}`);
+    console.log(`\n  Tavo POS running → http://localhost:${PORT}`);
     console.log(`  Database: ${storeKind().toUpperCase()}   Payment mode: ${usingStripe ? 'STRIPE (test)' : 'MOCK (no key set)'}\n`);
   });
 }

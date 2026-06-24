@@ -26,6 +26,10 @@ CREATE TABLE IF NOT EXISTS orders (
   total      NUMERIC(10,2),
   status     TEXT,
   void_reason TEXT,
+  channel    TEXT DEFAULT 'pos',
+  platform   TEXT,
+  customer   TEXT,
+  external_id TEXT,
   created_at BIGINT,
   fired_at   BIGINT
 );
