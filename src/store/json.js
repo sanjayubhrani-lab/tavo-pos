@@ -17,7 +17,7 @@ export function makeJsonStore() {
     async reset({ menu = [], tables = [], staff = [], users = [], inventory = [], tenants } = {}) {
       const db = read();
       db.menu = menu; db.tables = tables; db.staff = staff; db.users = users; db.inventory = inventory;
-      db.orders = []; db.payments = []; db.customers = []; db.giftcards = [];
+      db.orders = []; db.payments = []; db.customers = []; db.giftcards = []; db.drawers = [];
       db.tenants = tenants || [{ id: DEFAULT_TENANT, name: 'Default', slug: DEFAULT_TENANT, plan: 'free', createdAt: Date.now() }];
       write(db);
     },
@@ -106,5 +106,12 @@ export function makeJsonStore() {
     async getGiftCardByCode(code, tenantId) { const k = String(code).toUpperCase().replace(/[^A-Z0-9]/g, ''); return (read().giftcards || []).find(g => owns(g, tenantId) && String(g.code).toUpperCase().replace(/[^A-Z0-9]/g, '') === k) || null; },
     async createGiftCard(g) { const db = read(); (db.giftcards ||= []).push(g); write(db); return g; },
     async updateGiftCard(id, patch) { const db = read(); const g = (db.giftcards ||= []).find(x => x.id === id); if (!g) return null; Object.assign(g, patch); write(db); return g; },
+
+    // ---- cash drawer sessions (scoped) ----
+    async getOpenDrawer(tenantId) { return (read().drawers || []).find(d => owns(d, tenantId) && d.status === 'open') || null; },
+    async getDrawer(id) { return (read().drawers || []).find(d => d.id === id) || null; },
+    async listDrawers(tenantId) { return (read().drawers || []).filter(d => owns(d, tenantId)).sort((a, b) => (b.openedAt || 0) - (a.openedAt || 0)); },
+    async createDrawer(d) { const db = read(); (db.drawers ||= []).push(d); write(db); return d; },
+    async updateDrawer(id, patch) { const db = read(); const d = (db.drawers ||= []).find(x => x.id === id); if (!d) return null; Object.assign(d, patch); write(db); return d; },
   };
 }
