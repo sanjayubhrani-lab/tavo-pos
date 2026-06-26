@@ -319,8 +319,12 @@ app.put('/api/tenant', requireAuth, requireRole('manager'), h(async (req, res) =
   const patch = {};
   if (req.body.mode && ['restaurant', 'retail'].includes(req.body.mode)) patch.mode = req.body.mode;
   if (req.body.name) patch.name = String(req.body.name);
-  const t = await store.updateTenant(tid(req), patch);
-  if (!t) return res.status(404).json({ error: 'business not found' });
+  let t = await store.updateTenant(tid(req), patch);
+  if (!t) {
+    // No tenant row yet (legacy default store) — create it, then apply.
+    await store.createTenant({ id: tid(req), name: patch.name || 'Tavo', slug: tid(req), plan: 'free', mode: patch.mode || 'restaurant', createdAt: Date.now() });
+    t = await store.getTenant(tid(req));
+  }
   res.json({ id: t.id, name: t.name, slug: t.slug, mode: t.mode || 'restaurant' });
 }));
 
@@ -736,6 +740,14 @@ async function start() {
       console.log('  Empty database detected → seeded default menu, tables, and users.');
     }
   }
+  // Self-heal: ensure the 'default' tenant has a real row (databases created
+  // before multi-tenancy stored data under tenant_id='default' but had no tenants row).
+  try {
+    if (!(await store.getTenant(DEFAULT_TENANT))) {
+      await store.createTenant({ id: DEFAULT_TENANT, name: 'Tavo', slug: DEFAULT_TENANT, plan: 'free', mode: 'restaurant', createdAt: Date.now() });
+      console.log('  Backfilled the default tenant row.');
+    }
+  } catch (e) { console.error('default-tenant backfill skipped:', e.message); }
   app.listen(PORT, () => {
     console.log(`\n  Tavo POS running → http://localhost:${PORT}`);
     console.log(`  Database: ${storeKind().toUpperCase()}   Payment mode: ${usingStripe ? 'STRIPE (test)' : 'MOCK (no key set)'}\n`);
