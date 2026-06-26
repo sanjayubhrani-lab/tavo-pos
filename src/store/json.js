@@ -1,62 +1,71 @@
 // JSON-file storage backend — the zero-setup default.
-// Implements the same async API as the Postgres backend so the rest of the
-// app doesn't care which one is in use.
+// Tenant-aware: every business is a "tenant". List/scan methods take a tenantId
+// (defaulting to 'default') so a single-store deployment behaves exactly as before,
+// while a multi-tenant deployment keeps each tenant's data fully isolated.
 import { read, write } from '../db.js';
+
+export const DEFAULT_TENANT = 'default';
+const T = x => x || DEFAULT_TENANT;          // normalize a tenantId
+const owns = (row, tid) => (row.tenantId || DEFAULT_TENANT) === T(tid);
 
 export function makeJsonStore() {
   return {
     kind: 'json',
     async init() { /* nothing to do */ },
 
-    // bulk reset (used by seed)
-    async reset({ menu = [], tables = [], staff = [], users = [] }) {
+    // bulk reset for one tenant's seed (used by `npm run seed` / first-boot).
+    async reset({ menu = [], tables = [], staff = [], users = [], tenants } = {}) {
       const db = read();
       db.menu = menu; db.tables = tables; db.staff = staff; db.users = users;
       db.orders = []; db.payments = [];
+      db.tenants = tenants || [{ id: DEFAULT_TENANT, name: 'Default', slug: DEFAULT_TENANT, plan: 'free', createdAt: Date.now() }];
       write(db);
     },
 
-    // menu
-    async listMenu() { return [...read().menu].sort((a,b)=>(a.sortOrder||0)-(b.sortOrder||0)); },
-    async createMenuItem(item) { const db = read(); db.menu.push(item); write(db); return item; },
-    async updateMenuItem(id, patch) {
-      const db = read(); const it = db.menu.find(m => m.id === id);
-      if (!it) return null; Object.assign(it, patch); write(db); return it;
+    // ---- tenants ----
+    async createTenant(t) { const db = read(); (db.tenants ||= []).push(t); write(db); return t; },
+    async getTenant(id) { return (read().tenants || []).find(t => t.id === id) || null; },
+    async getTenantBySlug(slug) { return (read().tenants || []).find(t => t.slug === slug) || null; },
+    async listTenants() { return read().tenants || []; },
+    // Add one tenant's starter data without wiping others (used by signup).
+    async seedTenant({ menu = [], tables = [], staff = [], users = [] }) {
+      const db = read();
+      db.menu.push(...menu); db.tables.push(...tables); db.staff.push(...staff); db.users.push(...users);
+      write(db);
     },
+
+    // ---- menu (scoped) ----
+    async listMenu(tenantId) { return read().menu.filter(m => owns(m, tenantId)).sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0)); },
+    async createMenuItem(item) { const db = read(); db.menu.push(item); write(db); return item; },
+    async updateMenuItem(id, patch) { const db = read(); const it = db.menu.find(m => m.id === id); if (!it) return null; Object.assign(it, patch); write(db); return it; },
     async deleteMenuItem(id) { const db = read(); db.menu = db.menu.filter(m => m.id !== id); write(db); },
 
-    // tables
-    async listTables() { return read().tables; },
-    async setTableStatus(number, status, orderId = null) {
-      const db = read(); const t = db.tables.find(x => x.number === number);
+    // ---- tables (scoped; table numbers repeat per tenant) ----
+    async listTables(tenantId) { return read().tables.filter(t => owns(t, tenantId)); },
+    async setTableStatus(number, status, orderId = null, tenantId) {
+      const db = read(); const t = db.tables.find(x => x.number === number && owns(x, tenantId));
       if (t) { t.status = status; t.orderId = orderId; write(db); }
     },
 
-    // orders
-    async listOrders(status) {
-      const orders = read().orders; return status ? orders.filter(o => o.status === status) : orders;
+    // ---- orders ----
+    async listOrders(status, tenantId) {
+      return read().orders.filter(o => owns(o, tenantId) && (!status || o.status === status));
     },
-    async countOrders() { return read().orders.length; },
+    async countOrders(tenantId) { return read().orders.filter(o => owns(o, tenantId)).length; },
     async getOrder(id) { return read().orders.find(o => o.id === id) || null; },
-    async findOrderByExternalId(externalId) { return read().orders.find(o => o.externalId === externalId) || null; },
+    async findOrderByExternalId(externalId, tenantId) { return read().orders.find(o => o.externalId === externalId && owns(o, tenantId)) || null; },
     async createOrder(order) { const db = read(); db.orders.push(order); write(db); return order; },
-    async updateOrder(id, patch) {
-      const db = read(); const o = db.orders.find(x => x.id === id);
-      if (!o) return null; Object.assign(o, patch); write(db); return o;
-    },
+    async updateOrder(id, patch) { const db = read(); const o = db.orders.find(x => x.id === id); if (!o) return null; Object.assign(o, patch); write(db); return o; },
 
-    // payments
-    async listPayments() { return read().payments; },
+    // ---- payments ----
+    async listPayments(tenantId) { return read().payments.filter(p => owns(p, tenantId)); },
     async createPayment(p) { const db = read(); db.payments.push(p); write(db); return p; },
-    async findPaymentByStripeId(stripeId) { return read().payments.find(p => p.stripeId === stripeId) || null; },
+    async findPaymentByStripeId(stripeId, tenantId) { return read().payments.find(p => p.stripeId === stripeId && (tenantId == null || owns(p, tenantId))) || null; },
     async getPayment(id) { return read().payments.find(p => p.id === id) || null; },
-    async updatePayment(id, patch) {
-      const db = read(); const p = db.payments.find(x => x.id === id);
-      if (!p) return null; Object.assign(p, patch); write(db); return p;
-    },
+    async updatePayment(id, patch) { const db = read(); const p = db.payments.find(x => x.id === id); if (!p) return null; Object.assign(p, patch); write(db); return p; },
 
-    // users / staff
-    async listUsers() { return read().users; },
-    async listStaff() { return read().staff; },
+    // ---- users / staff (scoped) ----
+    async listUsers(tenantId) { return read().users.filter(u => owns(u, tenantId)); },
+    async listStaff(tenantId) { return read().staff.filter(s => owns(s, tenantId)); },
   };
 }

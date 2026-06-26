@@ -6,24 +6,40 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+export const DEFAULT_TENANT = 'default';
+const T = x => x || DEFAULT_TENANT;
 
 // ---- row mappers (snake_case DB → camelCase app objects) ----
 const num = v => (v == null ? v : Number(v));
 const mMenu = r => ({ id: r.id, category: r.category, name: r.name, price: num(r.price), emoji: r.emoji,
-  image: r.image ?? null, sortOrder: num(r.sort_order) || 0, modifierGroups: r.modifier_groups ?? [], active: r.active });
-const mTable = r => ({ number: num(r.number), status: r.status, orderId: r.order_id });
+  image: r.image ?? null, sortOrder: num(r.sort_order) || 0, modifierGroups: r.modifier_groups ?? [], active: r.active, tenantId: r.tenant_id ?? DEFAULT_TENANT });
+const mTable = r => ({ number: num(r.number), status: r.status, orderId: r.order_id, tenantId: r.tenant_id ?? DEFAULT_TENANT });
 const mOrder = r => ({ id: r.id, number: num(r.number), table: r.table_no == null ? null : num(r.table_no),
   lines: r.lines, subtotal: num(r.subtotal), tax: num(r.tax), total: num(r.total),
   status: r.status, voidReason: r.void_reason ?? null,
   channel: r.channel ?? 'pos', platform: r.platform ?? null, customer: r.customer ?? null, externalId: r.external_id ?? null,
-  createdAt: num(r.created_at), firedAt: r.fired_at == null ? undefined : num(r.fired_at) });
+  createdAt: num(r.created_at), firedAt: r.fired_at == null ? undefined : num(r.fired_at), tenantId: r.tenant_id ?? DEFAULT_TENANT });
 const mPay = r => ({ id: r.id, orderId: r.order_id, table: r.table_no == null ? null : num(r.table_no),
   lines: r.lines, subtotal: num(r.subtotal), tax: num(r.tax), tip: num(r.tip), total: num(r.total),
   method: r.method, status: r.status, stripeId: r.stripe_id, confirmed: r.confirmed,
   refundedAmount: num(r.refunded_amount) || 0, refundedAt: r.refunded_at == null ? null : num(r.refunded_at),
-  createdAt: num(r.created_at) });
-const mUser = r => ({ id: r.id, name: r.name, role: r.role, pinHash: r.pin_hash });
-const mStaff = r => ({ id: r.id, name: r.name, role: r.role, clockedInAt: r.clocked_in_at == null ? null : num(r.clocked_in_at) });
+  createdAt: num(r.created_at), tenantId: r.tenant_id ?? DEFAULT_TENANT });
+const mUser = r => ({ id: r.id, name: r.name, role: r.role, pinHash: r.pin_hash, tenantId: r.tenant_id ?? DEFAULT_TENANT });
+const mStaff = r => ({ id: r.id, name: r.name, role: r.role, clockedInAt: r.clocked_in_at == null ? null : num(r.clocked_in_at), tenantId: r.tenant_id ?? DEFAULT_TENANT });
+const mTenant = r => ({ id: r.id, name: r.name, slug: r.slug, plan: r.plan, createdAt: num(r.created_at) });
+
+// Insert one tenant's rows (stamped with tenant_id) without wiping others.
+async function insertSeed(q, { menu = [], tables = [], staff = [], users = [] }) {
+  for (const m of menu)
+    await q('INSERT INTO menu(id,category,name,price,emoji,image,sort_order,modifier_groups,active,tenant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+      [m.id, m.category, m.name, m.price, m.emoji, m.image ?? null, m.sortOrder ?? 0, JSON.stringify(m.modifierGroups ?? []), m.active, T(m.tenantId)]);
+  for (const t of tables)
+    await q('INSERT INTO tables(number,status,order_id,tenant_id) VALUES($1,$2,$3,$4)', [t.number, t.status, t.orderId, T(t.tenantId)]);
+  for (const s of staff)
+    await q('INSERT INTO staff(id,name,role,clocked_in_at,tenant_id) VALUES($1,$2,$3,$4,$5)', [s.id, s.name, s.role, s.clockedInAt, T(s.tenantId)]);
+  for (const u of users)
+    await q('INSERT INTO users(id,name,role,pin_hash,tenant_id) VALUES($1,$2,$3,$4,$5)', [u.id, u.name, u.role, u.pinHash, T(u.tenantId)]);
+}
 
 export async function makePgStore(poolOverride) {
   let pool = poolOverride;
@@ -56,29 +72,42 @@ export async function makePgStore(poolOverride) {
         'ALTER TABLE orders ADD COLUMN customer TEXT',
         'ALTER TABLE orders ADD COLUMN external_id TEXT',
         "ALTER TABLE menu ADD COLUMN modifier_groups JSONB DEFAULT '[]'",
+        "ALTER TABLE menu ADD COLUMN tenant_id TEXT DEFAULT 'default'",
+        "ALTER TABLE tables ADD COLUMN tenant_id TEXT DEFAULT 'default'",
+        "ALTER TABLE orders ADD COLUMN tenant_id TEXT DEFAULT 'default'",
+        "ALTER TABLE payments ADD COLUMN tenant_id TEXT DEFAULT 'default'",
+        "ALTER TABLE users ADD COLUMN tenant_id TEXT DEFAULT 'default'",
+        "ALTER TABLE staff ADD COLUMN tenant_id TEXT DEFAULT 'default'",
+        // table numbers repeat per tenant — drop the old single-column PK if present.
+        'ALTER TABLE tables DROP CONSTRAINT tables_pkey',
       ];
       for (const u of upgrades) { try { await q(u); } catch { /* column already present */ } }
     },
 
-    async reset({ menu = [], tables = [], staff = [], users = [] }) {
-      for (const t of ['menu', 'tables', 'orders', 'payments', 'users', 'staff'])
+    // ---- tenants ----
+    async createTenant(t) {
+      await q('INSERT INTO tenants(id,name,slug,plan,created_at) VALUES($1,$2,$3,$4,$5)', [t.id, t.name, t.slug, t.plan ?? 'free', t.createdAt ?? Date.now()]);
+      return t;
+    },
+    async getTenant(id) { const r = (await q('SELECT * FROM tenants WHERE id=$1', [id])).rows[0]; return r ? mTenant(r) : null; },
+    async getTenantBySlug(slug) { const r = (await q('SELECT * FROM tenants WHERE slug=$1', [slug])).rows[0]; return r ? mTenant(r) : null; },
+    async listTenants() { return (await q('SELECT * FROM tenants ORDER BY created_at')).rows.map(mTenant); },
+    async seedTenant(data) { await insertSeed(q, data); },
+
+    async reset({ menu = [], tables = [], staff = [], users = [], tenants } = {}) {
+      for (const t of ['menu', 'tables', 'orders', 'payments', 'users', 'staff', 'tenants'])
         await q(`DELETE FROM ${t}`);
-      for (const m of menu)
-        await q('INSERT INTO menu(id,category,name,price,emoji,image,sort_order,modifier_groups,active) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',
-          [m.id, m.category, m.name, m.price, m.emoji, m.image ?? null, m.sortOrder ?? 0, JSON.stringify(m.modifierGroups ?? []), m.active]);
-      for (const t of tables)
-        await q('INSERT INTO tables(number,status,order_id) VALUES($1,$2,$3)', [t.number, t.status, t.orderId]);
-      for (const s of staff)
-        await q('INSERT INTO staff(id,name,role,clocked_in_at) VALUES($1,$2,$3,$4)', [s.id, s.name, s.role, s.clockedInAt]);
-      for (const u of users)
-        await q('INSERT INTO users(id,name,role,pin_hash) VALUES($1,$2,$3,$4)', [u.id, u.name, u.role, u.pinHash]);
+      const tlist = tenants || [{ id: DEFAULT_TENANT, name: 'Default', slug: DEFAULT_TENANT, plan: 'free', createdAt: Date.now() }];
+      for (const t of tlist)
+        await q('INSERT INTO tenants(id,name,slug,plan,created_at) VALUES($1,$2,$3,$4,$5)', [t.id, t.name, t.slug, t.plan ?? 'free', t.createdAt ?? Date.now()]);
+      await insertSeed(q, { menu, tables, staff, users });
     },
 
-    // menu
-    async listMenu() { return (await q('SELECT * FROM menu ORDER BY sort_order, category, name')).rows.map(mMenu); },
+    // menu (tenant-scoped)
+    async listMenu(tenantId) { return (await q('SELECT * FROM menu WHERE tenant_id=$1 ORDER BY sort_order, category, name', [T(tenantId)])).rows.map(mMenu); },
     async createMenuItem(i) {
-      await q('INSERT INTO menu(id,category,name,price,emoji,image,sort_order,modifier_groups,active) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',
-        [i.id, i.category, i.name, i.price, i.emoji, i.image ?? null, i.sortOrder ?? 0, JSON.stringify(i.modifierGroups ?? []), i.active]);
+      await q('INSERT INTO menu(id,category,name,price,emoji,image,sort_order,modifier_groups,active,tenant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+        [i.id, i.category, i.name, i.price, i.emoji, i.image ?? null, i.sortOrder ?? 0, JSON.stringify(i.modifierGroups ?? []), i.active, T(i.tenantId)]);
       return i;
     },
     async updateMenuItem(id, patch) {
@@ -90,27 +119,27 @@ export async function makePgStore(poolOverride) {
     },
     async deleteMenuItem(id) { await q('DELETE FROM menu WHERE id=$1', [id]); },
 
-    // tables
-    async listTables() { return (await q('SELECT * FROM tables ORDER BY number')).rows.map(mTable); },
-    async setTableStatus(number, status, orderId = null) {
-      await q('UPDATE tables SET status=$2, order_id=$3 WHERE number=$1', [number, status, orderId]);
+    // tables (tenant-scoped)
+    async listTables(tenantId) { return (await q('SELECT * FROM tables WHERE tenant_id=$1 ORDER BY number', [T(tenantId)])).rows.map(mTable); },
+    async setTableStatus(number, status, orderId = null, tenantId) {
+      await q('UPDATE tables SET status=$2, order_id=$3 WHERE number=$1 AND tenant_id=$4', [number, status, orderId, T(tenantId)]);
     },
 
-    // orders
-    async listOrders(status) {
+    // orders (tenant-scoped)
+    async listOrders(status, tenantId) {
       const r = status
-        ? await q('SELECT * FROM orders WHERE status=$1 ORDER BY created_at', [status])
-        : await q('SELECT * FROM orders ORDER BY created_at');
+        ? await q('SELECT * FROM orders WHERE tenant_id=$2 AND status=$1 ORDER BY created_at', [status, T(tenantId)])
+        : await q('SELECT * FROM orders WHERE tenant_id=$1 ORDER BY created_at', [T(tenantId)]);
       return r.rows.map(mOrder);
     },
-    async countOrders() { return Number((await q('SELECT COUNT(*) AS c FROM orders')).rows[0].c); },
+    async countOrders(tenantId) { return Number((await q('SELECT COUNT(*) AS c FROM orders WHERE tenant_id=$1', [T(tenantId)])).rows[0].c); },
     async getOrder(id) { const r = (await q('SELECT * FROM orders WHERE id=$1', [id])).rows[0]; return r ? mOrder(r) : null; },
-    async findOrderByExternalId(externalId) { const r = (await q('SELECT * FROM orders WHERE external_id=$1', [externalId])).rows[0]; return r ? mOrder(r) : null; },
+    async findOrderByExternalId(externalId, tenantId) { const r = (await q('SELECT * FROM orders WHERE external_id=$1 AND tenant_id=$2', [externalId, T(tenantId)])).rows[0]; return r ? mOrder(r) : null; },
     async createOrder(o) {
-      await q(`INSERT INTO orders(id,number,table_no,lines,subtotal,tax,total,status,channel,platform,customer,external_id,created_at,fired_at)
-               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+      await q(`INSERT INTO orders(id,number,table_no,lines,subtotal,tax,total,status,channel,platform,customer,external_id,created_at,fired_at,tenant_id)
+               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
         [o.id, o.number, o.table, JSON.stringify(o.lines), o.subtotal, o.tax, o.total, o.status,
-         o.channel ?? 'pos', o.platform ?? null, o.customer ?? null, o.externalId ?? null, o.createdAt, o.firedAt ?? null]);
+         o.channel ?? 'pos', o.platform ?? null, o.customer ?? null, o.externalId ?? null, o.createdAt, o.firedAt ?? null, T(o.tenantId)]);
       return o;
     },
     async updateOrder(id, patch) {
@@ -121,16 +150,17 @@ export async function makePgStore(poolOverride) {
       return n;
     },
 
-    // payments
-    async listPayments() { return (await q('SELECT * FROM payments ORDER BY created_at')).rows.map(mPay); },
+    // payments (tenant-scoped)
+    async listPayments(tenantId) { return (await q('SELECT * FROM payments WHERE tenant_id=$1 ORDER BY created_at', [T(tenantId)])).rows.map(mPay); },
     async createPayment(p) {
-      await q(`INSERT INTO payments(id,order_id,table_no,lines,subtotal,tax,tip,total,method,status,stripe_id,confirmed,created_at)
-               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-        [p.id, p.orderId, p.table, JSON.stringify(p.lines), p.subtotal, p.tax, p.tip, p.total, p.method, p.status, p.stripeId, p.confirmed ?? false, p.createdAt]);
+      await q(`INSERT INTO payments(id,order_id,table_no,lines,subtotal,tax,tip,total,method,status,stripe_id,confirmed,created_at,tenant_id)
+               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+        [p.id, p.orderId, p.table, JSON.stringify(p.lines), p.subtotal, p.tax, p.tip, p.total, p.method, p.status, p.stripeId, p.confirmed ?? false, p.createdAt, T(p.tenantId)]);
       return p;
     },
-    async findPaymentByStripeId(stripeId) {
-      const r = (await q('SELECT * FROM payments WHERE stripe_id=$1', [stripeId])).rows[0]; return r ? mPay(r) : null;
+    async findPaymentByStripeId(stripeId, tenantId) {
+      const sql = tenantId == null ? 'SELECT * FROM payments WHERE stripe_id=$1' : 'SELECT * FROM payments WHERE stripe_id=$1 AND tenant_id=$2';
+      const r = (await q(sql, tenantId == null ? [stripeId] : [stripeId, T(tenantId)])).rows[0]; return r ? mPay(r) : null;
     },
     async getPayment(id) {
       const r = (await q('SELECT * FROM payments WHERE id=$1', [id])).rows[0]; return r ? mPay(r) : null;
@@ -143,8 +173,8 @@ export async function makePgStore(poolOverride) {
       return n;
     },
 
-    // users / staff
-    async listUsers() { return (await q('SELECT * FROM users')).rows.map(mUser); },
-    async listStaff() { return (await q('SELECT * FROM staff')).rows.map(mStaff); },
+    // users / staff (tenant-scoped)
+    async listUsers(tenantId) { return (await q('SELECT * FROM users WHERE tenant_id=$1', [T(tenantId)])).rows.map(mUser); },
+    async listStaff(tenantId) { return (await q('SELECT * FROM staff WHERE tenant_id=$1', [T(tenantId)])).rows.map(mStaff); },
   };
 }
