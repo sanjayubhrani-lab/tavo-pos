@@ -9,6 +9,7 @@ import { buildSeedData } from './seedData.js';
 import { createPaymentIntent, retrieveStatus, createRefund, usingStripe, stripeClient, paymentGateway, publishableKey } from './payments.js';
 import { verifyPin, hashPin, issueToken, requireAuth, requireRole, ROLE_ROUTES } from './auth.js';
 import { normalizeIncoming, exportMenu } from './integrations.js';
+import { answer as askTavo, suggestions as askSuggestions } from './ask.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -724,6 +725,27 @@ app.post('/api/giftcards/:code/redeem', requireAuth, requireRole('manager', 'ser
   const balance = round(card.balance - applied);
   const updated = await store.updateGiftCard(card.id, { balance, active: balance > 0 });
   res.json({ applied, card: updated });
+}));
+
+// ---- Ask Tavo (natural-language business assistant) ----
+app.get('/api/ask/suggestions', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const t = await store.getTenant(tid(req));
+  res.json({ suggestions: askSuggestions((t && t.mode) || 'restaurant') });
+}));
+
+app.post('/api/ask', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const question = String(req.body.question || '');
+  const t = await store.getTenant(tid(req));
+  const [payments, orders, menu, inventory, customers, giftcards] = await Promise.all([
+    store.listPayments(tid(req)), store.listOrders(undefined, tid(req)), store.listMenu(tid(req)),
+    store.listInventory(tid(req)), store.listCustomers(tid(req)), store.listGiftCards(tid(req)),
+  ]);
+  const result = askTavo(question, {
+    payments, orders, menu, inventory, customers, giftcards,
+    taxRate: TAX_RATE, loyalty: { earnRate: LOYALTY_EARN, redeemRate: LOYALTY_REDEEM },
+    mode: (t && t.mode) || 'restaurant',
+  });
+  res.json({ question, ...result });
 }));
 
 // ---- staff ----
