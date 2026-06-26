@@ -15,6 +15,9 @@ const app = express();
 app.set('trust proxy', 1);   // correct client IP / protocol behind a load balancer (Render, Fly, etc.)
 const PORT = process.env.PORT || 4242;
 const TAX_RATE = parseFloat(process.env.TAX_RATE || '0.0825');
+// Loyalty: earn N points per $1 of pre-tax spend; each point is worth $REDEEM at redemption.
+const LOYALTY_EARN = parseFloat(process.env.LOYALTY_EARN_RATE || '1');      // points per $1
+const LOYALTY_REDEEM = parseFloat(process.env.LOYALTY_REDEEM_RATE || '0.05'); // $ per point (100pts = $5)
 
 // Store is initialized in start(); handlers access it via this reference.
 let store;
@@ -362,19 +365,39 @@ app.post('/api/payments/intent', requireAuth, requireRole('manager', 'server'), 
 
 // Step 2: record the completed payment + close the order/table
 app.post('/api/payments/complete', requireAuth, requireRole('manager', 'server'), h(async (req, res) => {
-  const { intentId, method = 'card', lines = [], tip = 0, orderId = null, table = null } = req.body;
+  const { intentId, method = 'card', lines = [], tip = 0, orderId = null, table = null, customerId = null, pointsRedeemed = 0, discount = 0 } = req.body;
   const status = await retrieveStatus(intentId);
   const totals = priceLines(lines);
-  const total = round(totals.total + Number(tip || 0));
+  const disc = Math.max(0, round(Number(discount) || 0));
+  const total = Math.max(0, round(totals.total + Number(tip || 0) - disc));
+
+  // ---- loyalty: award points + apply any redemption to the attached member ----
+  let pointsEarned = 0, member = null;
+  if (customerId) {
+    member = await store.getCustomer(customerId);
+    if (member && (member.tenantId || DEFAULT_TENANT) === tid(req)) {
+      pointsEarned = Math.floor(totals.subtotal * LOYALTY_EARN);
+      const redeem = Math.max(0, Math.min(Math.round(Number(pointsRedeemed) || 0), member.points || 0));
+      const newPoints = Math.max(0, (member.points || 0) - redeem + pointsEarned);
+      await store.updateCustomer(member.id, {
+        points: newPoints,
+        visits: (member.visits || 0) + 1,
+        totalSpent: round((member.totalSpent || 0) + total),
+      });
+    } else { member = null; }
+  }
+
   const payment = {
     id: nanoid(10), orderId, table, lines, ...totals, tip: Number(tip || 0), total,
     method, status, stripeId: intentId || null, confirmed: false,
-    refundedAmount: 0, refundedAt: null, tenantId: tid(req), createdAt: Date.now(),
+    refundedAmount: 0, refundedAt: null, discount: disc,
+    customerId: member ? member.id : null, pointsEarned, pointsRedeemed: member ? Math.round(Number(pointsRedeemed) || 0) : 0,
+    tenantId: tid(req), createdAt: Date.now(),
   };
   await store.createPayment(payment);
   if (orderId) await store.updateOrder(orderId, { status: 'paid' });
   if (table) await store.setTableStatus(table, 'open', null, tid(req));
-  res.status(201).json(payment);
+  res.status(201).json({ ...payment, pointsBalance: member ? (await store.getCustomer(member.id)).points : null });
 }));
 
 app.get('/api/payments', requireAuth, h(async (req, res) => res.json(await store.listPayments(tid(req)))));
@@ -578,6 +601,83 @@ app.post('/api/inventory/:id/adjust', requireAuth, requireRole('manager'), h(asy
 app.delete('/api/inventory/:id', requireAuth, requireRole('manager'), h(async (req, res) => {
   await store.deleteInventoryItem(req.params.id);
   res.status(204).end();
+}));
+
+// ---- loyalty config ----
+app.get('/api/loyalty/config', requireAuth, (req, res) =>
+  res.json({ earnRate: LOYALTY_EARN, redeemRate: LOYALTY_REDEEM }));
+
+// ---- customers (loyalty members) ----
+app.get('/api/customers', requireAuth, h(async (req, res) => res.json(await store.listCustomers(tid(req)))));
+
+// Look up a member by phone (to attach to a check). Returns the customer or null.
+app.get('/api/customers/lookup', requireAuth, h(async (req, res) => {
+  if (!req.query.phone) return res.status(400).json({ error: 'phone required' });
+  res.json(await store.findCustomerByPhone(req.query.phone, tid(req)));
+}));
+
+app.post('/api/customers', requireAuth, h(async (req, res) => {
+  const { name, phone } = req.body;
+  if (!phone) return res.status(400).json({ error: 'phone required' });
+  const existing = await store.findCustomerByPhone(phone, tid(req));
+  if (existing) return res.json(existing);   // idempotent — return the existing member
+  const c = { id: nanoid(10), name: (name || 'Guest').toString().slice(0, 60), phone: String(phone), points: 0, visits: 0, totalSpent: 0, tenantId: tid(req), createdAt: Date.now() };
+  await store.createCustomer(c);
+  res.status(201).json(c);
+}));
+
+app.put('/api/customers/:id', requireAuth, h(async (req, res) => {
+  const patch = {};
+  for (const k of ['name', 'phone']) if (req.body[k] != null) patch[k] = String(req.body[k]);
+  const out = await store.updateCustomer(req.params.id, patch);
+  out ? res.json(out) : res.status(404).json({ error: 'not found' });
+}));
+
+// Manual points adjustment (manager) — comps, corrections, promos.
+app.post('/api/customers/:id/points', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const c = await store.getCustomer(req.params.id);
+  if (!c) return res.status(404).json({ error: 'not found' });
+  const delta = Math.round(Number(req.body.delta) || 0);
+  const points = Math.max(0, (c.points || 0) + delta);
+  res.json(await store.updateCustomer(c.id, { points }));
+}));
+
+// ---- gift cards ----
+function genGiftCode() {
+  const a = () => Math.random().toString(36).slice(2, 6).toUpperCase();
+  return `TAVO-${a()}-${a()}`;
+}
+app.get('/api/giftcards', requireAuth, requireRole('manager'), h(async (req, res) => res.json(await store.listGiftCards(tid(req)))));
+
+// Issue (sell) a gift card loaded with `amount`. The card balance is a liability,
+// counted as revenue only when later spent on an order — so no sale is recorded here.
+app.post('/api/giftcards', requireAuth, h(async (req, res) => {
+  const amount = round(Number(req.body.amount));
+  if (!(amount > 0)) return res.status(400).json({ error: 'load amount must be positive' });
+  let code = (req.body.code ? String(req.body.code) : genGiftCode()).toUpperCase();
+  if (await store.getGiftCardByCode(code, tid(req))) return res.status(409).json({ error: 'that code already exists' });
+  const card = { id: nanoid(10), code, balance: amount, initialBalance: amount, active: true, tenantId: tid(req), createdAt: Date.now() };
+  await store.createGiftCard(card);
+  res.status(201).json(card);
+}));
+
+// Check a card's balance by code.
+app.get('/api/giftcards/:code', requireAuth, h(async (req, res) => {
+  const card = await store.getGiftCardByCode(req.params.code, tid(req));
+  card ? res.json(card) : res.status(404).json({ error: 'gift card not found' });
+}));
+
+// Redeem (spend) up to `amount` from a card; returns the amount actually applied.
+app.post('/api/giftcards/:code/redeem', requireAuth, requireRole('manager', 'server'), h(async (req, res) => {
+  const card = await store.getGiftCardByCode(req.params.code, tid(req));
+  if (!card) return res.status(404).json({ error: 'gift card not found' });
+  if (card.active === false || card.balance <= 0) return res.status(400).json({ error: 'card has no balance' });
+  let amount = req.body.amount == null ? card.balance : round(Number(req.body.amount));
+  if (!(amount > 0)) return res.status(400).json({ error: 'amount must be positive' });
+  const applied = Math.min(amount, card.balance);
+  const balance = round(card.balance - applied);
+  const updated = await store.updateGiftCard(card.id, { balance, active: balance > 0 });
+  res.json({ applied, card: updated });
 }));
 
 // ---- staff ----

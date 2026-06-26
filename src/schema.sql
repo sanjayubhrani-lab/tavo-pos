@@ -82,5 +82,36 @@ CREATE TABLE IF NOT EXISTS staff (
   tenant_id     TEXT DEFAULT 'default'
 );
 
+CREATE TABLE IF NOT EXISTS inventory (
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL,
+  unit       TEXT DEFAULT 'unit',
+  qty        NUMERIC(12,3) DEFAULT 0,
+  par_level  NUMERIC(12,3) DEFAULT 0,
+  cost       NUMERIC(10,4) DEFAULT 0,
+  tenant_id  TEXT DEFAULT 'default'
+);
+
+CREATE TABLE IF NOT EXISTS customers (
+  id          TEXT PRIMARY KEY,
+  name        TEXT,
+  phone       TEXT,
+  points      INTEGER DEFAULT 0,
+  visits      INTEGER DEFAULT 0,
+  total_spent NUMERIC(12,2) DEFAULT 0,
+  tenant_id   TEXT DEFAULT 'default',
+  created_at  BIGINT
+);
+
+CREATE TABLE IF NOT EXISTS giftcards (
+  id              TEXT PRIMARY KEY,
+  code            TEXT,
+  balance         NUMERIC(10,2) DEFAULT 0,
+  initial_balance NUMERIC(10,2) DEFAULT 0,
+  active          BOOLEAN DEFAULT TRUE,
+  tenant_id       TEXT DEFAULT 'default',
+  created_at      BIGINT
+);
+
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_payments_stripe ON payments(stripe_id);
