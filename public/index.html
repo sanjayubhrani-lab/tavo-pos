@@ -129,6 +129,7 @@ const IS_NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && wi
 const API = IS_NATIVE ? BACKEND_URL : '';  // same origin on web, hosted backend on mobile
 const $ = s => document.querySelector(s);
 const money = n => '$' + Number(n).toFixed(2);
+const esc = s => String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let TOKEN = localStorage.getItem('pp_token') || null;
 let ME = null;  // {id, name, role, routes}
 
