@@ -211,6 +211,9 @@ let CFG = {paymentMode:'mock', taxRate:0.0825, publishableKey:null};
 let MENU = [], CATS = [], activeCat = '', check = [], tableNo = null, route='pos';
 let checkCustomer = null;   // loyalty member attached to the current check
 let LOYALTY = { earnRate: 1, redeemRate: 0.05 };
+let TENANT_MODE = 'restaurant';   // 'restaurant' | 'retail'
+const isRetail = () => TENANT_MODE === 'retail';
+let posSearch = '';   // retail product search / scan filter
 const MODIFIERS = ["No onions","Extra cheese (+$1.50)","Add bacon (+$2)","Gluten-free (+$2)","Spicy","Well done","On the side"];
 
 const NAV=[{id:"pos",ic:"🧾",label:"Order"},{id:"floor",ic:"🍽️",label:"Tables"},{id:"kds",ic:"👨‍🍳",label:"Kitchen"},
@@ -228,7 +231,21 @@ $("#overlay").addEventListener("click",e=>{if(e.target.id==="overlay")closeModal
 function totals(lines){const sub=lines.reduce((a,l)=>a+(l.price+(l.mods||[]).reduce((s,m)=>{const x=String(m).match(/\+\$([0-9.]+)/);return s+(x?+x[1]:0)},0))*l.qty,0);
   const tax=sub*CFG.taxRate;return{sub,tax,total:sub+tax}}
 
-function allowedNav(){ const r = (ME&&ME.routes)||[]; return NAV.filter(n=>r.includes(n.id)); }
+function allowedNav(){
+  const r = (ME&&ME.routes)||[];
+  let nav = NAV.filter(n=>r.includes(n.id));
+  if(isRetail()){
+    // Retail businesses don't need tables, kitchen, QR table-ordering, or delivery.
+    const hide=new Set(['floor','kds','qr','online']);
+    nav = nav.filter(n=>!hide.has(n.id)).map(n=>{
+      if(n.id==='pos') return {...n,ic:'🛒',label:'Sell'};
+      if(n.id==='menu') return {...n,ic:'🏷️',label:'Products'};
+      if(n.id==='inventory') return {...n,label:'Stock'};
+      return n;
+    });
+  }
+  return nav;
+}
 function renderNav(){
   $("#nav").innerHTML = allowedNav().map(n=>`<button class="navbtn ${route===n.id?'active':''}" onclick="go('${n.id}')"><span class="ic">${n.ic}</span>${n.label}</button>`).join("")
     + `<button class="navbtn" style="margin-top:auto" onclick="logout()"><span class="ic">⎋</span>Logout</button>`;
@@ -236,7 +253,9 @@ function renderNav(){
 function go(r){ if(!((ME&&ME.routes)||[]).includes(r)){toast('Not allowed for your role');return} route=r;renderNav();render() }
 
 async function render(){
-  $("#vtitle").textContent=titles[route][0];$("#vsub").textContent=titles[route][1];
+  const retailTitles={pos:["Sell","Ring up a sale"],menu:["Products","Catalog & pricing"],inventory:["Stock","On-hand & reorder"]};
+  const ttl=(isRetail()&&retailTitles[route])||titles[route];
+  $("#vtitle").textContent=ttl[0];$("#vsub").textContent=ttl[1];
   const v=$("#view");
   if(route==="pos")v.innerHTML=posView();
   else if(route==="floor")v.innerHTML=await floorView();
@@ -253,12 +272,40 @@ async function render(){
 
 /* ---- POS ---- */
 function posView(){
-  const cats=CATS.map(c=>`<button class="cat ${c===activeCat?'active':''}" onclick="setCat('${c}')">${c}</button>`).join("");
-  const items=MENU.filter(i=>i.category===activeCat && i.active!==false).map(it=>`<button class="item" onclick="addItem('${it.id}')"
+  const searching = posSearch.trim().length>0;
+  const q = posSearch.trim().toLowerCase();
+  const match = i => i.active!==false && (i.name.toLowerCase().includes(q) || (i.sku&&String(i.sku).toLowerCase().includes(q)) || (i.barcode&&String(i.barcode).toLowerCase().includes(q)));
+  const list = searching ? MENU.filter(match) : MENU.filter(i=>i.category===activeCat && i.active!==false);
+  const cats = searching ? '' : CATS.map(c=>`<button class="cat ${c===activeCat?'active':''}" onclick="setCat('${c}')">${c}</button>`).join("");
+  const badge = it => {
+    if(!it.trackStock) return '';
+    const s=Number(it.stock)||0;
+    const col = s<=0?'var(--red)':(s<=5?'var(--amber)':'var(--mut)');
+    return `<div class="pr" style="color:${col};font-size:11px">${s<=0?'Out of stock':(s+' in stock')}</div>`;
+  };
+  const items = list.map(it=>`<button class="item" ${it.trackStock&&Number(it.stock)<=0?'disabled style="opacity:.45"':''} onclick="addItem('${it.id}')"
     ${it.image?`style="background-image:linear-gradient(rgba(15,17,21,.45),rgba(15,17,21,.85)),url('${it.image}');background-size:cover;background-position:center"`:''}>
-    ${it.image?'':`<div class="emoji">${it.emoji}</div>`}<div><div class="nm">${it.name}</div><div class="pr">${money(it.price)}</div></div></button>`).join("")
-    || `<div class="empty">No available items in ${activeCat}.</div>`;
-  return `<div class="pos"><div class="menuwrap"><div class="cats">${cats}</div><div class="items">${items}</div></div>${checkPanel()}</div>`;
+    ${it.image?'':`<div class="emoji">${it.emoji}</div>`}<div><div class="nm">${it.name}</div><div class="pr">${money(it.price)}</div>${badge(it)}${it.sku?`<div class="pr" style="font-size:10px;color:var(--mut)">${it.sku}</div>`:''}</div></button>`).join("")
+    || `<div class="empty">No ${isRetail()?'products':'items'} ${searching?('match "'+esc(posSearch)+'"'):('in '+activeCat)}.</div>`;
+  const scan = `<div style="padding:0 0 10px"><input id="posScan" placeholder="${isRetail()?'🔍 Scan barcode or search products…':'🔍 Search menu…'}"
+      value="${esc(posSearch)}" oninput="setSearch(this.value)" onkeydown="if(event.key==='Enter')scanAdd()"
+      style="width:100%;padding:12px 14px;border-radius:10px;background:var(--panel2);border:1px solid var(--line);color:var(--txt);font-size:15px"></div>`;
+  return `<div class="pos"><div class="menuwrap">${scan}${cats?`<div class="cats">${cats}</div>`:''}<div class="items">${items}</div></div>${checkPanel()}</div>`;
+}
+function setSearch(v){
+  posSearch=v;
+  // re-render the POS view but keep the search box focused with its caret position
+  const el=document.getElementById('posScan'); const pos=el?el.selectionStart:null;
+  $("#view").innerHTML=posView();
+  const ne=document.getElementById('posScan'); if(ne){ ne.focus(); if(pos!=null){try{ne.setSelectionRange(pos,pos);}catch(e){}} }
+}
+async function scanAdd(){
+  const code=posSearch.trim(); if(!code) return;
+  // exact barcode/SKU match → add directly (scanner behavior)
+  let it=MENU.find(m=>m.barcode&&m.barcode===code) || MENU.find(m=>m.sku&&String(m.sku).toLowerCase()===code.toLowerCase());
+  if(!it){ try{ it=await api('/products/lookup?code='+encodeURIComponent(code)); }catch(e){ it=null; } }
+  if(it&&it.id){ const full=MENU.find(m=>m.id===it.id)||it; if(full.trackStock&&Number(full.stock)<=0){toast('Out of stock');return;} addItem(full.id); posSearch=''; render(); }
+  else { toast('No product matches "'+code+'"'); }
 }
 function checkPanel(){
   const t=totals(check);
@@ -276,8 +323,8 @@ function checkPanel(){
         <span style="font-size:13px">💳 <b>${checkCustomer.name||'Member'}</b> · ${checkCustomer.points} pts</span>
         <button class="chip" style="margin-left:auto;padding:3px 8px" onclick="detachCustomer()">✕</button></div>`
     : `<div style="padding:8px 12px;border-bottom:1px solid var(--line)"><button class="chip" style="width:100%" onclick="attachCustomer()">＋ Add loyalty member</button></div>`;
-  return `<div class="check"><div class="hd"><h3>${tableNo?('Table '+tableNo):'New Check'}</h3>
-    <button class="chip" onclick="assignTable()">${tableNo?'Change':'🍽️ Table'}</button></div>
+  return `<div class="check"><div class="hd"><h3>${tableNo?('Table '+tableNo):(isRetail()?'New Sale':'New Check')}</h3>
+    ${isRetail()?'':`<button class="chip" onclick="assignTable()">${tableNo?'Change':'🍽️ Table'}</button>`}</div>
     ${custRow}
     <div class="lines">${lines}</div>
     <div class="totals"><div class="totrow"><span>Subtotal</span><span>${money(t.sub)}</span></div>
@@ -378,6 +425,18 @@ async function enrolCustomer(phone){
 function useCustomer(json){ checkCustomer=JSON.parse(JSON.parse(json)); closeModal(); render(); toast('💳 Member attached'); }
 function detachCustomer(){ checkCustomer=null; render(); }
 
+async function setBizMode(mode){
+  if(mode===TENANT_MODE){ return; }
+  try{
+    const t=await api('/tenant',{method:'PUT',body:JSON.stringify({mode})});
+    TENANT_MODE=(t&&t.mode)||mode;
+    if(ME) ME.tenantMode=TENANT_MODE;
+    // if current route got hidden by the mode switch, fall back to a valid one
+    if(!allowedNav().some(n=>n.id===route)) route=(allowedNav()[0]||{id:'pos'}).id;
+    renderNav(); render();
+    toast(isRetail()?'🛍️ Switched to Retail mode':'🍽️ Switched to Restaurant mode');
+  }catch(e){ toast('⚠️ '+e.message); }
+}
 function toggleSetting(key,on){ localStorage.setItem(key, on?'1':'0'); toast(on?'On':'Off'); }
 const autoTicket = () => localStorage.getItem('pp_autoprint_ticket')==='1';
 async function sendToKitchen(){
@@ -538,6 +597,7 @@ async function completePayment(intentId,grand){
       tip:pay.tip, table:pay.table, discount:payDiscount(),
       customerId: pay.customer?pay.customer.id:null, pointsRedeemed: pay.pointsRedeemed||0})});
     if(pay.customer && r && r.pointsBalance!=null) toast('💳 '+(r.pointsEarned||0)+' pts earned · balance '+r.pointsBalance);
+    try{ await loadMenu(); }catch(e){}   // refresh retail stock counts after a sale
     check=[];tableNo=null;checkCustomer=null;showReceipt(grand);renderNav();
   }catch(e){toast('⚠️ '+e.message)}
 }
@@ -901,7 +961,16 @@ function itemForm(it){
     </div>
     <div class="fld"><label>Emoji (fallback when no photo)</label><input id="mi-emoji" value="${it.emoji||'🍽️'}"></div>
     <label style="display:flex;align-items:center;gap:10px;font-size:13px;margin:6px 0 14px;cursor:pointer">
-      <input type="checkbox" id="mi-active" ${it.active!==false?'checked':''}> Available for ordering</label>
+      <input type="checkbox" id="mi-active" ${it.active!==false?'checked':''}> Available for ${isRetail()?'sale':'ordering'}</label>
+    <div class="card" style="background:var(--panel2);margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><b style="font-size:13px">🏷️ Retail / stock</b>
+        <label style="margin-left:auto;font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="checkbox" id="mi-track" ${it.trackStock?'checked':''}> Track stock</label></div>
+      <div class="row2">
+        <div class="fld" style="margin:0"><label>SKU</label><input id="mi-sku" value="${(it.sku||'').replace(/"/g,'&quot;')}" placeholder="e.g. TSHIRT-BLK-M"></div>
+        <div class="fld" style="margin:0"><label>Barcode (UPC)</label><input id="mi-barcode" value="${(it.barcode||'').replace(/"/g,'&quot;')}" placeholder="scan or type"></div></div>
+      <div class="fld" style="margin:8px 0 0"><label>Stock on hand</label><input id="mi-stock" type="number" step="1" value="${it.stock!=null?it.stock:''}" placeholder="quantity"></div>
+    </div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin:4px 0 8px">
       <b style="font-size:13px">Modifier groups</b>
       <button class="chip" onclick="addModGroup()">+ Add group</button></div>
@@ -1106,9 +1175,13 @@ async function saveItem(id){
     min:g.required?(g.min||1):(g.min||0), max:+g.max||0,
     options:(g.options||[]).filter(o=>o.name).map(o=>({name:o.name,price:+o.price||0})) }));
   const recipe=_editRecipe.filter(r=>r.invId&&(+r.qty>0)).map(r=>({invId:r.invId,qty:+r.qty}));
+  const stockVal=$("#mi-stock")?$("#mi-stock").value:'';
   const body={ name:$("#mi-name").value.trim(), category:$("#mi-cat").value.trim()||'Other',
     price:$("#mi-price").value, emoji:$("#mi-emoji").value||'🍽️',
-    image:$("#mi-image").value||null, modifierGroups:groups, recipe, active:document.getElementById('mi-active').checked };
+    image:$("#mi-image").value||null, modifierGroups:groups, recipe,
+    sku:($("#mi-sku")?$("#mi-sku").value.trim():'')||null, barcode:($("#mi-barcode")?$("#mi-barcode").value.trim():'')||null,
+    stock:stockVal===''?null:Number(stockVal), trackStock:document.getElementById('mi-track')?document.getElementById('mi-track').checked:false,
+    active:document.getElementById('mi-active').checked };
   if(!body.name||body.price===''){ toast('Name and price required'); return; }
   try{
     if(id) await api('/menu/'+id,{method:'PUT',body:JSON.stringify(body)});
@@ -1155,7 +1228,14 @@ async function teamView(){
 
 /* ---- SETTINGS ---- */
 function settingsView(){
-  return `<div class="row2">
+  return `<div class="card" style="margin-bottom:14px">
+      <div class="sec-title">🏪 Business type</div>
+      <p style="font-size:13px;color:var(--mut);margin:0 0 12px">Switch between a restaurant POS (tables, kitchen, QR &amp; delivery) and a retail register (barcodes, SKUs, stock counts). Changes the whole app to fit your business.</p>
+      <div style="display:flex;gap:10px">
+        <button class="btn ${!isRetail()?'primary':'ghost'}" style="flex:1;padding:14px" onclick="setBizMode('restaurant')">🍽️ Restaurant${!isRetail()?' ✓':''}</button>
+        <button class="btn ${isRetail()?'primary':'ghost'}" style="flex:1;padding:14px" onclick="setBizMode('retail')">🛍️ Retail${isRetail()?' ✓':''}</button>
+      </div></div>
+    <div class="row2">
     <div class="card"><div class="sec-title">Payments</div>
       <p style="font-size:13px;color:var(--mut)">Mode: <b style="color:${CFG.paymentMode==='stripe'?'var(--green)':'var(--amber)'}">${CFG.paymentMode.toUpperCase()}</b></p>
       <p style="font-size:13px;color:var(--mut);line-height:1.6">${CFG.paymentMode==='stripe'?'Live Stripe test mode — use card 4242 4242 4242 4242.':'Mock processor active. Add Stripe TEST keys in the .env file and restart to take real test cards.'}</p></div>
@@ -1220,6 +1300,7 @@ async function loadMenu(){MENU=await api('/menu').catch(()=>cacheGet('/menu')||[
 async function startApp(){
   try{CFG=await api('/config')}catch{}
   try{LOYALTY=await api('/loyalty/config')}catch{}
+  try{ const t=await api('/tenant'); TENANT_MODE=(t&&t.mode)||(ME&&ME.tenantMode)||'restaurant'; }catch{ TENANT_MODE=(ME&&ME.tenantMode)||'restaurant'; }
   const GW={stripe:'💳 Stripe',fiserv:'💳 Fiserv',tsys:'💳 TSYS',mock:'🧪 Mock pay'};
   $("#modebadge").textContent=(GW[CFG.paymentMode]||('💳 '+CFG.paymentMode))+(ME?` · ${ME.name} (${ME.role})`:'');
   // ensure default route is allowed for this role
