@@ -28,6 +28,14 @@ const h = fn => (req, res) => fn(req, res).catch(e => {
 const DEFAULT_TENANT = 'default';
 const tid = req => (req && req.user && req.user.tenantId) || DEFAULT_TENANT;
 
+// Resolve a public (guest) request's tenant from a ?tenant=slug param.
+// Returns { id, slug, name } or null if the slug is unknown.
+async function resolveTenant(slug) {
+  if (!slug || slug === DEFAULT_TENANT) return { id: DEFAULT_TENANT, slug: DEFAULT_TENANT, name: 'Tavo' };
+  const t = await store.getTenantBySlug(String(slug));
+  return t ? { id: t.id, slug: t.slug, name: t.name } : null;
+}
+
 app.use(cors());
 
 // ---- Stripe webhook (MUST be registered with the raw body, before express.json) ----
@@ -109,21 +117,132 @@ app.post('/api/tenants', h(async (req, res) => {
 app.post('/api/auth/login', h(async (req, res) => {
   const { pin, tenant } = req.body;
   if (!pin) return res.status(400).json({ error: 'PIN required' });
-  let tenantId = DEFAULT_TENANT;
+  let tenantId = DEFAULT_TENANT, tenantSlug = DEFAULT_TENANT, tenantName = 'Tavo';
   if (tenant && tenant !== DEFAULT_TENANT) {
     const tt = await store.getTenantBySlug(String(tenant));
     if (!tt) return res.status(404).json({ error: 'unknown business' });
-    tenantId = tt.id;
+    tenantId = tt.id; tenantSlug = tt.slug; tenantName = tt.name;
   }
   const users = await store.listUsers(tenantId);
   const user = users.find(u => verifyPin(pin, u.pinHash));
   if (!user) return res.status(401).json({ error: 'Invalid PIN' });
-  const token = issueToken({ ...user, tenantId });
-  res.json({ token, user: { id: user.id, name: user.name, role: user.role, tenantId, routes: ROLE_ROUTES[user.role] || [] } });
+  const token = issueToken({ ...user, tenantId, tenantSlug, tenantName });
+  res.json({ token, user: { id: user.id, name: user.name, role: user.role, tenantId, tenantSlug, tenantName, routes: ROLE_ROUTES[user.role] || [] } });
 }));
 
 app.get('/api/auth/me', requireAuth, (req, res) =>
   res.json({ ...req.user, routes: ROLE_ROUTES[req.user.role] || [] }));
+
+// ===================================================================
+//  GUEST  ·  QR Mobile Order & Pay  (public, no login — scoped by ?tenant=slug)
+// ===================================================================
+// A diner scans the QR on their table → opens /order.html?tenant=slug&table=N.
+// These endpoints are intentionally unauthenticated but strictly read-only
+// for menu/config, and write-only for creating their own order + payment.
+
+// Public storefront config (branding + payment publishable key).
+app.get('/api/guest/config', h(async (req, res) => {
+  const t = await resolveTenant(req.query.tenant);
+  if (!t) return res.status(404).json({ error: 'restaurant not found' });
+  res.json({
+    tenant: { slug: t.slug, name: t.name },
+    publishableKey: publishableKey(),
+    paymentMode: paymentGateway,
+    taxRate: TAX_RATE,
+  });
+}));
+
+// Public menu for the guest storefront (active items only).
+app.get('/api/guest/menu', h(async (req, res) => {
+  const t = await resolveTenant(req.query.tenant);
+  if (!t) return res.status(404).json({ error: 'restaurant not found' });
+  const menu = (await store.listMenu(t.id)).filter(m => m.active !== false);
+  res.json(menu);
+}));
+
+// Sanitize guest-submitted cart lines against the real menu so prices/mods
+// can never be tampered with from the client. Returns priced server-side lines.
+async function buildGuestLines(tenantId, rawLines) {
+  const menu = await store.listMenu(tenantId);
+  const byId = new Map(menu.map(m => [m.id, m]));
+  const lines = [];
+  for (const l of (rawLines || [])) {
+    const item = byId.get(l.id) || menu.find(m => m.name === l.name);
+    if (!item || item.active === false) continue;
+    const qty = Math.max(1, Math.min(99, parseInt(l.qty, 10) || 1));
+    // Validate modifiers against the item's modifier groups (use trusted prices).
+    const mods = [];
+    const groups = item.modifierGroups || [];
+    for (const chosen of (l.mods || [])) {
+      const name = typeof chosen === 'string' ? chosen.replace(/\s*\(\+\$[0-9.]+\)\s*$/, '') : chosen.name;
+      let opt = null;
+      for (const g of groups) { const o = (g.options || []).find(o => o.name === name); if (o) { opt = o; break; } }
+      if (!opt) continue;
+      mods.push(opt.price ? `${opt.name} (+$${Number(opt.price).toFixed(2)})` : opt.name);
+    }
+    lines.push({ id: item.id, name: item.name, price: item.price, qty, mods });
+  }
+  return lines;
+}
+
+// Place an order from the table (pay at counter / add to tab — staff settles it).
+app.post('/api/guest/orders', h(async (req, res) => {
+  const t = await resolveTenant(req.body.tenant);
+  if (!t) return res.status(404).json({ error: 'restaurant not found' });
+  const lines = await buildGuestLines(t.id, req.body.lines);
+  if (!lines.length) return res.status(400).json({ error: 'your cart is empty' });
+  const table = req.body.table != null ? Number(req.body.table) : null;
+  const totals = priceLines(lines);
+  const count = await store.countOrders(t.id);
+  const order = {
+    id: nanoid(10), number: 1000 + count + 1, table, lines, ...totals,
+    status: 'open', channel: 'qr', customer: (req.body.name || 'Table guest').toString().slice(0, 60),
+    tenantId: t.id, createdAt: Date.now(),
+  };
+  await store.createOrder(order);
+  if (table) await store.setTableStatus(table, 'seated', order.id, t.id);
+  res.status(201).json({ ok: true, order: { number: order.number, total: order.total, status: order.status } });
+}));
+
+// Step 1 of guest pay: create a payment intent for the cart.
+app.post('/api/guest/pay/intent', h(async (req, res) => {
+  const t = await resolveTenant(req.body.tenant);
+  if (!t) return res.status(404).json({ error: 'restaurant not found' });
+  const lines = await buildGuestLines(t.id, req.body.lines);
+  if (!lines.length) return res.status(400).json({ error: 'your cart is empty' });
+  const totals = priceLines(lines);
+  const tip = Math.max(0, Number(req.body.tip || 0));
+  const grand = round(totals.total + tip);
+  const intent = await createPaymentIntent(grand, { tenant: t.slug, table: String(req.body.table || '') });
+  res.json({ ...intent, amount: grand, ...totals, tip });
+}));
+
+// Step 2 of guest pay: confirm → record payment + fire the order to the kitchen.
+app.post('/api/guest/pay/complete', h(async (req, res) => {
+  const t = await resolveTenant(req.body.tenant);
+  if (!t) return res.status(404).json({ error: 'restaurant not found' });
+  const lines = await buildGuestLines(t.id, req.body.lines);
+  if (!lines.length) return res.status(400).json({ error: 'your cart is empty' });
+  const table = req.body.table != null ? Number(req.body.table) : null;
+  const tip = Math.max(0, Number(req.body.tip || 0));
+  const totals = priceLines(lines);
+  const total = round(totals.total + tip);
+  const status = await retrieveStatus(req.body.intentId);
+  const count = await store.countOrders(t.id);
+  const order = {
+    id: nanoid(10), number: 1000 + count + 1, table, lines, ...totals,
+    status: 'cooking', channel: 'qr', customer: (req.body.name || 'Table guest').toString().slice(0, 60),
+    paid: true, tenantId: t.id, createdAt: Date.now(), firedAt: Date.now(),
+  };
+  await store.createOrder(order);
+  await store.createPayment({
+    id: nanoid(10), orderId: order.id, table, lines, ...totals, tip, total,
+    method: 'card', status, stripeId: req.body.intentId || null, confirmed: false,
+    refundedAmount: 0, refundedAt: null, tenantId: t.id, createdAt: Date.now(),
+  });
+  if (table) await store.setTableStatus(table, 'seated', order.id, t.id);
+  res.status(201).json({ ok: true, order: { number: order.number, total, status: order.status } });
+}));
 
 // ---- menu ----
 app.get('/api/menu', requireAuth, h(async (req, res) => res.json(await store.listMenu(tid(req)))));

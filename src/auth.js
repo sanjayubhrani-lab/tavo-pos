@@ -8,7 +8,7 @@ const TOKEN_TTL = '12h';
 
 // What each role is allowed to do (used by both API guards and the UI).
 export const ROLE_ROUTES = {
-  manager: ['pos', 'floor', 'kds', 'online', 'dash', 'menu', 'team', 'settings'],
+  manager: ['pos', 'floor', 'kds', 'online', 'qr', 'dash', 'menu', 'team', 'settings'],
   server:  ['pos', 'floor', 'kds', 'online'],
   kitchen: ['kds', 'online'],
 };
@@ -23,7 +23,7 @@ export function verifyPin(pin, hash) {
 
 export function issueToken(user) {
   return jwt.sign(
-    { id: user.id, name: user.name, role: user.role, tenantId: user.tenantId || 'default' },
+    { id: user.id, name: user.name, role: user.role, tenantId: user.tenantId || 'default', tenantSlug: user.tenantSlug || 'default', tenantName: user.tenantName || 'Tavo' },
     SECRET,
     { expiresIn: TOKEN_TTL }
   );
