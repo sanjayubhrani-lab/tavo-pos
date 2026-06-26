@@ -213,6 +213,7 @@ let MENU = [], CATS = [], activeCat = '', check = [], tableNo = null, route='pos
 let checkCustomer = null;   // loyalty member attached to the current check
 let LOYALTY = { earnRate: 1, redeemRate: 0.05 };
 let TENANT_MODE = 'restaurant';   // 'restaurant' | 'retail'
+let TENANT_SETTINGS = {};         // { serviceChargePct, autoGratPct, autoGratParty }
 const isRetail = () => TENANT_MODE === 'retail';
 let posSearch = '';   // retail product search / scan filter
 const MODIFIERS = ["No onions","Extra cheese (+$1.50)","Add bacon (+$2)","Gluten-free (+$2)","Spicy","Well done","On the side"];
@@ -439,6 +440,14 @@ async function setBizMode(mode){
     toast(isRetail()?'🛍️ Switched to Retail mode':'🍽️ Switched to Restaurant mode');
   }catch(e){ toast('⚠️ '+e.message); }
 }
+async function saveServiceCharge(){
+  const pct=parseFloat($("#sc-pct").value)||0, party=parseInt($("#sc-party").value,10)||0;
+  try{
+    const t=await api('/tenant',{method:'PUT',body:JSON.stringify({settings:{serviceChargePct:pct,autoGratParty:party}})});
+    TENANT_SETTINGS=(t&&t.settings)||TENANT_SETTINGS;
+    toast('✅ Saved');
+  }catch(e){ toast('⚠️ '+e.message); }
+}
 function toggleSetting(key,on){ localStorage.setItem(key, on?'1':'0'); toast(on?'On':'Off'); }
 const autoTicket = () => localStorage.getItem('pp_autoprint_ticket')==='1';
 async function sendToKitchen(){
@@ -466,52 +475,100 @@ function queueOrder(payload){
 let pay={};
 async function startPayment(){
   const t=totals(check);
-  pay={lines:JSON.parse(JSON.stringify(check)),table:tableNo,base:t.total,sub:t.sub,tax:t.tax,tip:+(t.total*0.18).toFixed(2),tipPct:18,method:'card',
-    customer:checkCustomer, pointsRedeemed:0, redeemDiscount:0, giftApplied:0, giftCode:null};
+  pay={lines:JSON.parse(JSON.stringify(check)),table:tableNo,sub:t.sub,tip:+(t.sub*0.18).toFixed(2),tipPct:18,method:'card',
+    customer:checkCustomer, pointsRedeemed:0, redeemDiscount:0, manualDiscount:0, discountReason:'', comp:false,
+    serviceCharge:0, svcPct:0, giftApplied:0, giftCode:null};
+  // auto-apply the tenant's default service charge / auto-gratuity if configured
+  const sc=Number((TENANT_SETTINGS||{}).serviceChargePct)||0;
+  if(sc>0){ pay.svcPct=sc; pay.serviceCharge=Math.round(pay.sub*sc)/100; }
   paymentModal();
 }
-function payDiscount(){ return Math.round(((pay.redeemDiscount||0)+(pay.giftApplied||0))*100)/100; }
-function payGrand(){ return Math.max(0, Math.round((pay.base+pay.tip-payDiscount())*100)/100); }
+// Full settlement math (mirrors the server): discount reduces taxable subtotal,
+// service charge adds, tax on discounted subtotal, tip last; gift card is a tender.
+function payCalc(){
+  const sub=pay.sub;
+  const disc=Math.round(Math.min(sub,(pay.redeemDiscount||0)+(pay.manualDiscount||0))*100)/100;
+  const taxable=Math.round((sub-disc)*100)/100;
+  const svc=Math.round((pay.serviceCharge||0)*100)/100;
+  const tax=Math.round(taxable*(CFG.taxRate||0)*100)/100;
+  const tip=Math.round((pay.tip||0)*100)/100;
+  const total=Math.round((taxable+svc+tax+tip)*100)/100;
+  const gift=Math.min(pay.giftApplied||0,total);
+  const due=Math.round(Math.max(0,total-gift)*100)/100;
+  return {sub,disc,svc,tax,tip,total,gift,due};
+}
 function paymentModal(){
-  const grand=payGrand();
-  const tips=[15,18,20,25].map(p=>`<button class="tipbtn ${pay.tipPct===p?'sel':''}" onclick="setTip(${p})"><div class="p">${p}%</div><div class="a">${money(pay.base*p/100)}</div></button>`).join("");
+  const c=payCalc(); const isMgr=ME&&ME.role==='manager';
+  const tips=[15,18,20,25].map(p=>`<button class="tipbtn ${pay.tipPct===p?'sel':''}" onclick="setTip(${p})"><div class="p">${p}%</div><div class="a">${money(pay.sub*p/100)}</div></button>`).join("");
   const methods=[["card","💳","Card"],["cash","💵","Cash"],["wallet","📱","Wallet"]].map(m=>`<button class="pm ${pay.method===m[0]?'sel':''}" onclick="setMethod('${m[0]}')"><span class="ic">${m[1]}</span>${m[2]}</button>`).join("");
-  // loyalty: redeem points (member must have enough for a $ increment, applied against pre-discount total)
   let loyaltyBlock='';
   if(pay.customer){
     const m=pay.customer;
     const maxByPoints=Math.floor((m.points||0)*LOYALTY.redeemRate*100)/100;
-    const maxByBill=Math.max(0, Math.round((pay.base+pay.tip)*100)/100);
-    const can=Math.min(maxByPoints,maxByBill);
+    const can=Math.min(maxByPoints,pay.sub);
     const redeeming=pay.redeemDiscount>0;
     loyaltyBlock=`<div class="card" style="background:rgba(168,85,247,.1);margin:8px 0">
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <span style="font-size:13px">💳 <b>${m.name||'Member'}</b> · ${m.points} pts</span>
+        <span style="font-size:13px">💳 <b>${esc(m.name||'Member')}</b> · ${m.points} pts</span>
         ${can>0?`<button class="chip" onclick="toggleRedeem(${can})">${redeeming?'Remove':'Redeem '+money(can)}</button>`:'<span style="font-size:11px;color:var(--mut)">Not enough to redeem</span>'}
       </div>
       <div style="font-size:11px;color:var(--mut);margin-top:4px">Earns ~${Math.floor(pay.sub*LOYALTY.earnRate)} pts on this visit</div></div>`;
   }
+  // discount / comp
+  const discBlock=`<div class="fld" style="margin-top:8px"><label>Discount / Comp</label>
+    ${pay.manualDiscount>0
+      ? `<div style="display:flex;gap:6px;align-items:center"><span class="tag amber">${pay.comp?'Comp':'Discount'} −${money(pay.manualDiscount)}${pay.discountReason?(' · '+esc(pay.discountReason)):''}</span><button class="chip" style="margin-left:auto" onclick="clearDiscount()">Remove</button></div>`
+      : `<div style="display:flex;gap:6px"><button class="chip" onclick="openDiscount()">＋ Add discount</button>${isMgr?'<button class="chip" style="color:var(--amber)" onclick="compCheck()">Comp check (100%)</button>':''}</div>`}</div>`;
+  // service charge
+  const svcOn=pay.serviceCharge>0;
+  const svcBlock=`<div class="fld"><label>Service charge${pay.svcPct?(' ('+pay.svcPct+'%)'):''}</label>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <button class="chip ${!svcOn?'sel':''}" onclick="setSvc(0)">None</button>
+      <button class="chip ${pay.svcPct===18?'sel':''}" onclick="setSvc(18)">18%</button>
+      <button class="chip ${pay.svcPct===20?'sel':''}" onclick="setSvc(20)">20%</button>
+      <input type="number" step="0.01" placeholder="$ custom" value="${(svcOn&&!pay.svcPct)?pay.serviceCharge:''}" oninput="setSvcAmt(this.value)" style="width:90px;padding:6px 8px;border-radius:8px;background:var(--panel);border:1px solid var(--line);color:var(--txt)"></div></div>`;
   const giftBlock=`<div class="fld"><label>🎁 Gift card</label>
     <div style="display:flex;gap:6px">
-      <input id="gc-code" placeholder="TAVO-XXXX-XXXX" value="${pay.giftCode||''}" style="flex:1" ${pay.giftApplied>0?'disabled':''}>
+      <input id="gc-code" placeholder="TAVO-XXXX-XXXX" value="${esc(pay.giftCode||'')}" style="flex:1" ${pay.giftApplied>0?'disabled':''}>
       ${pay.giftApplied>0
         ? `<button class="chip" onclick="removeGift()">Remove ${money(pay.giftApplied)}</button>`
         : `<button class="chip" onclick="applyGift()">Apply</button>`}</div></div>`;
-  const discount=payDiscount();
-  openModal(`<div class="mhd"><h3>Payment · ${money(grand)}</h3><button class="x" onclick="closeModal()">✕</button></div><div class="mbd">
+  openModal(`<div class="mhd"><h3>Payment · ${money(c.due)}</h3><button class="x" onclick="closeModal()">✕</button></div><div class="mbd">
     ${loyaltyBlock}
     <div class="sec-title">Add tip</div><div class="tips">${tips}</div>
     <div class="fld"><label>Custom tip ($)</label><input id="ctip" type="number" step="0.01" value="${pay.tip.toFixed(2)}" oninput="setCustomTip(this.value)"></div>
-    ${giftBlock}
+    ${discBlock}${svcBlock}${giftBlock}
     <div class="sec-title">Payment method</div><div class="paymethods">${methods}</div>
     <div class="totals" style="border-top:none;padding:0">
-      <div class="totrow"><span>Subtotal</span><span>${money(pay.sub)}</span></div>
-      <div class="totrow"><span>Tax</span><span>${money(pay.tax)}</span></div>
-      <div class="totrow"><span>Tip</span><span>${money(pay.tip)}</span></div>
-      ${discount>0?`<div class="totrow" style="color:var(--purple,#a855f7)"><span>Discount${pay.redeemDiscount>0?' · points':''}${pay.giftApplied>0?' · gift card':''}</span><span>−${money(discount)}</span></div>`:''}
-      <div class="totrow big"><span>Total Due</span><span>${money(grand)}</span></div></div>
-    <button class="btn green" style="margin-top:10px" onclick="processPayment()">${grand>0?('Charge '+money(grand)):'Complete (paid)'}</button></div>`);
+      <div class="totrow"><span>Subtotal</span><span>${money(c.sub)}</span></div>
+      ${c.disc>0?`<div class="totrow" style="color:var(--amber)"><span>Discount</span><span>−${money(c.disc)}</span></div>`:''}
+      ${c.svc>0?`<div class="totrow"><span>Service charge</span><span>${money(c.svc)}</span></div>`:''}
+      <div class="totrow"><span>Tax</span><span>${money(c.tax)}</span></div>
+      <div class="totrow"><span>Tip</span><span>${money(c.tip)}</span></div>
+      ${c.gift>0?`<div class="totrow" style="color:#c084fc"><span>Gift card</span><span>−${money(c.gift)}</span></div>`:''}
+      <div class="totrow big"><span>${c.gift>0?'Amount due':'Total Due'}</span><span>${money(c.due)}</span></div></div>
+    <button class="btn green" style="margin-top:10px" onclick="processPayment()">${c.due>0?('Charge '+money(c.due)):'Complete (paid)'}</button></div>`);
 }
+function openDiscount(){
+  openModal(`<div class="mhd"><h3>Discount</h3><button class="x" onclick="paymentModal()">✕</button></div><div class="mbd">
+    <div class="row2">
+      <div class="fld"><label>Percent off (%)</label><input id="d-pct" type="number" step="1" min="0" max="100" placeholder="e.g. 10"></div>
+      <div class="fld"><label>or Amount off ($)</label><input id="d-amt" type="number" step="0.01" min="0" placeholder="e.g. 5.00"></div></div>
+    <div class="fld"><label>Reason</label><input id="d-reason" placeholder="e.g. Friends &amp; family, manager comp, coupon"></div>
+    <button class="btn primary" onclick="applyDiscount()">Apply discount</button></div>`);
+}
+function applyDiscount(){
+  const pct=parseFloat($("#d-pct").value)||0, amt=parseFloat($("#d-amt").value)||0;
+  let d=amt>0?amt:(pct>0?Math.round(pay.sub*pct)/100:0);
+  d=Math.min(pay.sub,Math.round(d*100)/100);
+  if(!(d>0)){ toast('Enter a percent or amount'); return; }
+  pay.manualDiscount=d; pay.discountReason=($("#d-reason").value||'').trim()||(pct?(pct+'% off'):'Discount'); pay.comp=false;
+  paymentModal();
+}
+function compCheck(){ if(!(ME&&ME.role==='manager')){toast('Manager required to comp');return;} pay.manualDiscount=pay.sub; pay.comp=true; pay.discountReason='Comp'; paymentModal(); }
+function clearDiscount(){ pay.manualDiscount=0; pay.comp=false; pay.discountReason=''; paymentModal(); }
+function setSvc(pct){ pay.svcPct=pct; pay.serviceCharge=pct?Math.round(pay.sub*pct)/100:0; paymentModal(); }
+function setSvcAmt(v){ pay.svcPct=0; pay.serviceCharge=Math.max(0,parseFloat(v)||0); const b=document.querySelector('.btn.green'); if(b){const c=payCalc();b.textContent=c.due>0?('Charge '+money(c.due)):'Complete (paid)';} }
 function toggleRedeem(can){
   if(pay.redeemDiscount>0){ pay.redeemDiscount=0; pay.pointsRedeemed=0; }
   else { pay.redeemDiscount=can; pay.pointsRedeemed=Math.ceil(can/LOYALTY.redeemRate); }
@@ -522,18 +579,18 @@ async function applyGift(){
   try{
     const card=await api('/giftcards/'+encodeURIComponent(code));
     if(!card||card.balance<=0){ toast('Card has no balance'); return; }
-    const need=Math.max(0,payGrand());
+    const need=Math.max(0,payCalc().total);
     pay.giftApplied=Math.min(card.balance,need); pay.giftCode=card.code;
     paymentModal(); toast('🎁 Applied '+money(pay.giftApplied));
   }catch(e){ toast('⚠️ '+(e.message||'Card not found')); }
 }
 function removeGift(){ pay.giftApplied=0; pay.giftCode=null; paymentModal(); }
-function setTip(p){pay.tipPct=p;pay.tip=+(pay.base*p/100).toFixed(2);paymentModal()}
-function setCustomTip(v){pay.tip=parseFloat(v)||0;pay.tipPct=null;$(".mhd h3").textContent='Payment · '+money(pay.base+pay.tip)}
+function setTip(p){pay.tipPct=p;pay.tip=+(pay.sub*p/100).toFixed(2);paymentModal()}
+function setCustomTip(v){pay.tip=parseFloat(v)||0;pay.tipPct=null;const c=payCalc();$(".mhd h3").textContent='Payment · '+money(c.due);const b=document.querySelector('.btn.green');if(b)b.textContent=c.due>0?('Charge '+money(c.due)):'Complete (paid)';}
 function setMethod(m){pay.method=m;paymentModal()}
 
 async function processPayment(){
-  const grand=payGrand();
+  const grand=payCalc().due;
   // Offline: card needs a connection; cash/wallet can be queued.
   if(!ONLINE){
     if(pay.method==='card'){ toast('💳 Card needs a connection — take cash or wait to reconnect'); return; }
@@ -562,6 +619,7 @@ function queuePayment(grand){
   const tempId='pay_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
   OUTBOX.push({type:'payment',tempId,payload:{
     method:pay.method, tip:pay.tip, table:pay.table, orderId:pay.orderId||null,
+    discount:Math.round(((pay.redeemDiscount||0)+(pay.manualDiscount||0))*100)/100, discountReason:pay.discountReason||null, comp:!!pay.comp, serviceCharge:pay.serviceCharge||0,
     lines:pay.lines.map(l=>({name:l.name,price:l.price,qty:l.qty,mods:l.mods}))}});
   saveOutbox();
   if(pay.table){ PENDING=PENDING.filter(p=>p.table!==pay.table); savePending(); }  // table settled locally
@@ -593,31 +651,38 @@ async function completePayment(intentId,grand){
       try{ await api('/giftcards/'+encodeURIComponent(pay.giftCode)+'/redeem',{method:'POST',body:JSON.stringify({amount:pay.giftApplied})}); }
       catch(e){ /* non-fatal: card may have changed */ }
     }
+    const trueDisc=Math.round(((pay.redeemDiscount||0)+(pay.manualDiscount||0))*100)/100;
     const r=await api('/payments/complete',{method:'POST',body:JSON.stringify({
       intentId, method:pay.giftApplied>0&&grand<=0?'giftcard':pay.method,
       lines:pay.lines.map(l=>({name:l.name,price:l.price,qty:l.qty,mods:l.mods})),
-      tip:pay.tip, table:pay.table, discount:payDiscount(),
+      tip:pay.tip, table:pay.table, discount:trueDisc, discountReason:pay.discountReason||null, comp:!!pay.comp, serviceCharge:pay.serviceCharge||0,
       customerId: pay.customer?pay.customer.id:null, pointsRedeemed: pay.pointsRedeemed||0})});
     if(pay.customer && r && r.pointsBalance!=null) toast('💳 '+(r.pointsEarned||0)+' pts earned · balance '+r.pointsBalance);
     try{ await loadMenu(); }catch(e){}   // refresh retail stock counts after a sale
     check=[];tableNo=null;checkCustomer=null;showReceipt(grand);renderNav();
   }catch(e){toast('⚠️ '+e.message)}
 }
-let _lastReceipt=null;   // {pay, grand, when} for print/email
-function receiptInner(p,grand,when){
+let _lastReceipt=null;   // {pay, calc, grand, when} for print/email
+function receiptInner(p,calc,grand,when){
+  const c=calc||{sub:p.sub||0,disc:0,svc:0,tax:0,tip:p.tip||0,total:grand,gift:0,due:grand};
   const items=p.lines.map(l=>`<div class="r"><span>${l.qty}× ${l.name}</span><span>${money(l.price*l.qty)}</span></div>${(l.mods&&l.mods.length)?`<div style="color:#777;font-size:11px;margin-left:14px">${l.mods.join(", ")}</div>`:""}`).join("");
   return `<div class="c"><b>TAVO</b><br>123 Main St · (555) 010-2233</div><hr>
     <div class="r"><span>${when}</span></div>${p.table?`<div class="r"><span>Table</span><span>${p.table}</span></div>`:`<div class="r"><span>Takeout</span><span></span></div>`}<hr>
-    ${items}<hr><div class="r"><span>Subtotal</span><span>${money(p.sub)}</span></div>
-    <div class="r"><span>Tax</span><span>${money(p.tax)}</span></div><div class="r"><span>Tip</span><span>${money(p.tip)}</span></div>
-    <div class="r"><b>TOTAL</b><b>${money(grand)}</b></div><div class="r"><span>Paid (${p.method})</span><span>${money(grand)}</span></div><hr>
+    ${items}<hr><div class="r"><span>Subtotal</span><span>${money(c.sub)}</span></div>
+    ${c.disc>0?`<div class="r"><span>Discount${p.discountReason?(' ('+p.discountReason+')'):''}</span><span>−${money(c.disc)}</span></div>`:''}
+    ${c.svc>0?`<div class="r"><span>Service charge</span><span>${money(c.svc)}</span></div>`:''}
+    <div class="r"><span>Tax</span><span>${money(c.tax)}</span></div><div class="r"><span>Tip</span><span>${money(c.tip)}</span></div>
+    <div class="r"><b>TOTAL</b><b>${money(c.total)}</b></div>
+    ${c.gift>0?`<div class="r"><span>Gift card</span><span>−${money(c.gift)}</span></div>`:''}
+    <div class="r"><span>Paid (${p.method})</span><span>${money(grand)}</span></div><hr>
     <div class="c">Thank you! 🙏</div>`;
 }
 function showReceipt(grand){
   const when=new Date().toLocaleString();
-  _lastReceipt={pay:JSON.parse(JSON.stringify(pay)),grand,when};
+  const calc=payCalc();
+  _lastReceipt={pay:JSON.parse(JSON.stringify(pay)),calc,grand,when};
   openModal(`<div class="mhd"><h3>✅ Payment Approved</h3><button class="x" onclick="closeModal();render()">✕</button></div>
-    <div class="mbd"><div class="receipt">${receiptInner(pay,grand,when)}</div>
+    <div class="mbd"><div class="receipt">${receiptInner(pay,calc,grand,when)}</div>
     <div style="display:flex;gap:8px;margin-top:14px">
       <button class="btn ghost" onclick="printReceipt()">🖨 Print</button>
       <button class="btn ghost" onclick="emailReceipt()">✉️ Email</button>
@@ -628,13 +693,13 @@ function showReceipt(grand){
 function doPrint(html){ const pa=document.getElementById('printArea'); pa.innerHTML=html; window.print(); }
 function printReceipt(){
   if(!_lastReceipt) return;
-  doPrint(receiptInner(_lastReceipt.pay,_lastReceipt.grand,_lastReceipt.when));
+  doPrint(receiptInner(_lastReceipt.pay,_lastReceipt.calc,_lastReceipt.grand,_lastReceipt.when));
 }
 function emailReceipt(){
   if(!_lastReceipt) return;
-  const p=_lastReceipt.pay,g=_lastReceipt.grand;
+  const p=_lastReceipt.pay,g=_lastReceipt.grand,c=_lastReceipt.calc||{};
   const lines=p.lines.map(l=>`${l.qty}x ${l.name}  ${money(l.price*l.qty)}`).join('%0D%0A');
-  const body=`Tavo Receipt%0D%0A${_lastReceipt.when}%0D%0A%0D%0A${lines}%0D%0A%0D%0ASubtotal ${money(p.sub)}%0D%0ATax ${money(p.tax)}%0D%0ATip ${money(p.tip)}%0D%0ATOTAL ${money(g)}%0D%0APaid (${p.method})%0D%0A%0D%0AThank you!`;
+  const body=`Tavo Receipt%0D%0A${_lastReceipt.when}%0D%0A%0D%0A${lines}%0D%0A%0D%0ASubtotal ${money(c.sub||p.sub)}${c.disc>0?('%0D%0ADiscount -'+money(c.disc)):''}${c.svc>0?('%0D%0AService charge '+money(c.svc)):''}%0D%0ATax ${money(c.tax||0)}%0D%0ATip ${money(c.tip||p.tip)}%0D%0ATOTAL ${money(c.total||g)}%0D%0APaid (${p.method})%0D%0A%0D%0AThank you!`;
   window.location.href=`mailto:?subject=Your%20Tavo%20Receipt&body=${body}`;
   toast('✉️ Opening email…');
 }
@@ -854,7 +919,7 @@ function zInner(z){
 function printZ(){ if(_lastZ) doPrint(zInner(_lastZ)); }
 
 async function dashView(){
-  const empty={gross:0,net:0,refunds:0,orders:0,avgCheck:0,tips:0,tax:0,openChecks:0,byMethod:{},topSellers:[],foodCost:0,foodCostPct:0,grossProfit:0,lowStock:[],stockValue:0};
+  const empty={gross:0,net:0,refunds:0,orders:0,avgCheck:0,tips:0,tax:0,openChecks:0,byMethod:{},topSellers:[],foodCost:0,foodCostPct:0,grossProfit:0,lowStock:[],stockValue:0,discounts:0,serviceCharges:0,comps:0};
   const r=await api('/reports/summary').catch(()=>cacheGet('/reports/summary')||empty);
   const kpi=(h,v,d)=>`<div class="card"><h4>${h}</h4><div class="val">${v}</div><div class="delta up">${d||''}</div></div>`;
   const maxc=r.topSellers.length?r.topSellers[0][1]:1;
@@ -876,7 +941,8 @@ async function dashView(){
     <div class="grid kpis">${kpi("Gross Sales",money(r.gross),"today")}${kpi("Net Sales",money(r.net),"after refunds")}
     ${kpi("Refunds",money(r.refunds||0),"issued")}${kpi("Orders",r.orders,"closed")}
     ${kpi("Avg Check",money(r.avgCheck),"per order")}${kpi("Tips",money(r.tips),"to staff")}
-    ${kpi("Tax",money(r.tax),"remit")}${kpi("Open Checks",r.openChecks,"in service")}</div>
+    ${kpi("Tax",money(r.tax),"remit")}${kpi("Open Checks",r.openChecks,"in service")}
+    ${kpi("Discounts",money(r.discounts||0),(r.comps||0)+" comps")}${kpi("Service Charges",money(r.serviceCharges||0),"collected")}</div>
     ${(r.foodCost||r.inventoryCount)?`<div class="grid kpis" style="margin-top:12px">
       ${kpi("Food Cost",money(r.foodCost||0),"ingredients used")}
       ${kpi("Food Cost %",(r.foodCostPct||0)+"%",(r.foodCostPct||0)<=33?"healthy":"watch margins")}
@@ -1278,6 +1344,14 @@ function settingsView(){
         <button class="btn ${!isRetail()?'primary':'ghost'}" style="flex:1;padding:14px" onclick="setBizMode('restaurant')">🍽️ Restaurant${!isRetail()?' ✓':''}</button>
         <button class="btn ${isRetail()?'primary':'ghost'}" style="flex:1;padding:14px" onclick="setBizMode('retail')">🛍️ Retail${isRetail()?' ✓':''}</button>
       </div></div>
+    <div class="card" style="margin-bottom:14px">
+      <div class="sec-title">💵 Service charge &amp; auto-gratuity</div>
+      <p style="font-size:13px;color:var(--mut);margin:0 0 12px">Set a default service charge that's pre-filled at checkout. Staff can still adjust or remove it per check.</p>
+      <div class="row2">
+        <div class="fld" style="margin:0"><label>Default service charge (%)</label><input id="sc-pct" type="number" step="0.5" min="0" max="100" value="${Number(TENANT_SETTINGS.serviceChargePct)||''}" placeholder="0 = off"></div>
+        <div class="fld" style="margin:0"><label>Auto-gratuity party size</label><input id="sc-party" type="number" step="1" min="0" value="${Number(TENANT_SETTINGS.autoGratParty)||''}" placeholder="e.g. 6"></div>
+      </div>
+      <button class="btn primary" style="margin-top:10px;flex:0;padding:10px 18px" onclick="saveServiceCharge()">Save</button></div>
     <div class="row2">
     <div class="card"><div class="sec-title">Payments</div>
       <p style="font-size:13px;color:var(--mut)">Mode: <b style="color:${CFG.paymentMode==='stripe'?'var(--green)':'var(--amber)'}">${CFG.paymentMode.toUpperCase()}</b></p>
@@ -1343,7 +1417,7 @@ async function loadMenu(){MENU=await api('/menu').catch(()=>cacheGet('/menu')||[
 async function startApp(){
   try{CFG=await api('/config')}catch{}
   try{LOYALTY=await api('/loyalty/config')}catch{}
-  try{ const t=await api('/tenant'); TENANT_MODE=(t&&t.mode)||(ME&&ME.tenantMode)||'restaurant'; }catch{ TENANT_MODE=(ME&&ME.tenantMode)||'restaurant'; }
+  try{ const t=await api('/tenant'); TENANT_MODE=(t&&t.mode)||(ME&&ME.tenantMode)||'restaurant'; TENANT_SETTINGS=(t&&t.settings)||{}; }catch{ TENANT_MODE=(ME&&ME.tenantMode)||'restaurant'; }
   const GW={stripe:'💳 Stripe',fiserv:'💳 Fiserv',tsys:'💳 TSYS',mock:'🧪 Mock pay'};
   $("#modebadge").textContent=(GW[CFG.paymentMode]||('💳 '+CFG.paymentMode))+(ME?` · ${ME.name} (${ME.role})`:'');
   // ensure default route is allowed for this role
