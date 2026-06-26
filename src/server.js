@@ -84,6 +84,35 @@ function priceLines(lines) {
   return { subtotal, tax, total: round(subtotal + tax) };
 }
 
+// Deplete ingredient stock for an order based on each menu item's recipe.
+// recipe = [{ invId, qty }]; consumed = qty × line.qty. Best-effort, never throws.
+async function depleteForOrder(order, tenantId = DEFAULT_TENANT) {
+  try {
+    const menu = await store.listMenu(tenantId);
+    const recipeOf = new Map(menu.map(m => [m.id, m.recipe || []]));
+    const byName = new Map(menu.map(m => [m.name, m.recipe || []]));
+    const used = new Map();   // invId → total qty consumed
+    for (const l of (order.lines || [])) {
+      const recipe = recipeOf.get(l.id) || byName.get(l.name) || [];
+      for (const r of recipe) {
+        if (!r || !r.invId) continue;
+        used.set(r.invId, (used.get(r.invId) || 0) + (Number(r.qty) || 0) * (Number(l.qty) || 1));
+      }
+    }
+    for (const [invId, qty] of used) if (qty > 0) await store.adjustInventory(invId, -qty);
+  } catch (e) { console.error('inventory depletion skipped:', e.message); }
+}
+
+// Sum the ingredient cost of an order's lines (for food-cost reporting).
+function orderFoodCost(lines, recipeOf, costOf) {
+  let c = 0;
+  for (const l of (lines || [])) {
+    const recipe = recipeOf.get(l.id) || recipeOf.get('name:' + l.name) || [];
+    for (const r of recipe) c += (Number(costOf.get(r.invId)) || 0) * (Number(r.qty) || 0) * (Number(l.qty) || 1);
+  }
+  return round(c);
+}
+
 // ---- config / health ----
 app.get('/api/health', (req, res) =>
   res.json({ ok: true, paymentMode: paymentGateway, taxRate: TAX_RATE, db: storeKind() }));
@@ -104,10 +133,15 @@ app.post('/api/tenants', h(async (req, res) => {
     return res.status(409).json({ error: 'that address is taken' });
   const tenant = { id: nanoid(10), name: String(name), slug: cleanSlug, plan: 'free', createdAt: Date.now() };
   await store.createTenant(tenant);
-  // Seed this tenant's own starter menu/tables/staff/users (stamped with its id).
+  // Seed this tenant's own starter menu/tables/staff/users/inventory (stamped with its id).
   const data = buildSeedData();
   const pin = String(managerPin || '1234');
-  for (const arr of [data.menu, data.tables, data.staff, data.users]) arr.forEach(x => { x.tenantId = tenant.id; });
+  // Inventory ids are global PKs, so give this tenant fresh ids and rewrite the
+  // recipe references on its menu to match (prevents cross-tenant id collisions).
+  const idMap = {};
+  (data.inventory || []).forEach(inv => { const nid = nanoid(8); idMap[inv.id] = nid; inv.id = nid; });
+  data.menu.forEach(m => { m.recipe = (m.recipe || []).map(r => ({ ...r, invId: idMap[r.invId] || r.invId })); });
+  for (const arr of [data.menu, data.tables, data.staff, data.users, data.inventory]) arr.forEach(x => { x.tenantId = tenant.id; });
   const mgr = data.users.find(u => u.role === 'manager'); if (mgr) mgr.pinHash = hashPin(pin);
   await store.seedTenant(data);
   res.status(201).json({ tenant: { id: tenant.id, name: tenant.name, slug: cleanSlug }, managerPin: pin, loginHint: `log in with ?tenant=${cleanSlug}` });
@@ -235,6 +269,7 @@ app.post('/api/guest/pay/complete', h(async (req, res) => {
     paid: true, tenantId: t.id, createdAt: Date.now(), firedAt: Date.now(),
   };
   await store.createOrder(order);
+  await depleteForOrder(order, t.id);   // paid guest order fires to kitchen
   await store.createPayment({
     id: nanoid(10), orderId: order.id, table, lines, ...totals, tip, total,
     method: 'card', status, stripeId: req.body.intentId || null, confirmed: false,
@@ -248,7 +283,7 @@ app.post('/api/guest/pay/complete', h(async (req, res) => {
 app.get('/api/menu', requireAuth, h(async (req, res) => res.json(await store.listMenu(tid(req)))));
 
 app.post('/api/menu', requireAuth, requireRole('manager'), h(async (req, res) => {
-  const { category, name, price, emoji, image, sortOrder, modifierGroups } = req.body;
+  const { category, name, price, emoji, image, sortOrder, modifierGroups, recipe } = req.body;
   if (!name || price == null) return res.status(400).json({ error: 'name and price required' });
   const existing = await store.listMenu(tid(req));
   const item = {
@@ -256,6 +291,7 @@ app.post('/api/menu', requireAuth, requireRole('manager'), h(async (req, res) =>
     emoji: emoji || '🍽️', image: image || null,
     sortOrder: sortOrder != null ? Number(sortOrder) : existing.length,
     modifierGroups: Array.isArray(modifierGroups) ? modifierGroups : [],
+    recipe: Array.isArray(recipe) ? recipe : [],
     tenantId: tid(req), active: true,
   };
   await store.createMenuItem(item);
@@ -300,8 +336,12 @@ app.post('/api/orders', requireAuth, h(async (req, res) => {
 
 // send order to kitchen
 app.post('/api/orders/:id/fire', requireAuth, h(async (req, res) => {
+  const before = await store.getOrder(req.params.id);
   const out = await store.updateOrder(req.params.id, { status: 'cooking', firedAt: Date.now() });
-  out ? res.json(out) : res.status(404).json({ error: 'not found' });
+  if (!out) return res.status(404).json({ error: 'not found' });
+  // Deplete stock only on the first fire (open → cooking), so re-fires don't double-count.
+  if (before && before.status !== 'cooking') await depleteForOrder(out, tid(req));
+  res.json(out);
 }));
 
 // bump (kitchen marks ready)
@@ -385,7 +425,22 @@ app.get('/api/reports/summary', requireAuth, requireRole('manager'), h(async (re
   pays.forEach(p => (p.lines || []).forEach(l => { itemCounts[l.name] = (itemCounts[l.name] || 0) + (l.qty || 0); }));
   const topSellers = Object.entries(itemCounts).sort((a, b) => b[1] - a[1]).slice(0, 6);
   const openChecks = tables.filter(t => t.status !== 'open').length;
-  res.json({ gross, refunds, net, tips, tax, orders, avgCheck, byMethod, topSellers, openChecks });
+
+  // ---- food cost & inventory health ----
+  const menu = await store.listMenu(tid(req));
+  const inventory = await store.listInventory(tid(req));
+  const costOf = new Map(inventory.map(i => [i.id, i.cost]));
+  const recipeOf = new Map();
+  menu.forEach(m => { recipeOf.set(m.id, m.recipe || []); recipeOf.set('name:' + m.name, m.recipe || []); });
+  const foodCost = round(pays.reduce((a, p) => a + orderFoodCost(p.lines, recipeOf, costOf), 0));
+  const netSalesForPct = round(gross - tax);   // food cost is measured against pre-tax sales
+  const foodCostPct = netSalesForPct > 0 ? round((foodCost / netSalesForPct) * 100) : 0;
+  const grossProfit = round(netSalesForPct - foodCost);
+  const lowStock = inventory.filter(i => i.qty <= (i.parLevel || 0)).map(i => ({ id: i.id, name: i.name, qty: i.qty, parLevel: i.parLevel, unit: i.unit }));
+  const stockValue = round(inventory.reduce((a, i) => a + i.qty * i.cost, 0));
+
+  res.json({ gross, refunds, net, tips, tax, orders, avgCheck, byMethod, topSellers, openChecks,
+    foodCost, foodCostPct, grossProfit, lowStock, stockValue, inventoryCount: inventory.length });
 }));
 
 // ---- delivery-platform integrations (DoorDash / Uber Eats / Grubhub / aggregators) ----
@@ -410,6 +465,7 @@ async function createDeliveryOrder(norm, tenantId = DEFAULT_TENANT) {
     externalId: norm.externalId, tenantId, createdAt: Date.now(), firedAt: Date.now(),
   };
   await store.createOrder(order);
+  await depleteForOrder(order, tenantId);   // delivery orders go straight to the kitchen
   // The platform already collected payment from the customer — record it so it shows in sales/reports by platform.
   await store.createPayment({
     id: nanoid(10), orderId: order.id, table: null, lines: norm.lines, ...totals,
@@ -486,6 +542,42 @@ app.get('/api/reports/zreport', requireAuth, requireRole('manager'), h(async (re
     count, avgCheck, itemsSold, voids, byMethod, topSellers,
     generatedAt: Date.now(),
   });
+}));
+
+// ---- inventory (stock + ingredients) ----
+app.get('/api/inventory', requireAuth, requireRole('manager'), h(async (req, res) => res.json(await store.listInventory(tid(req)))));
+
+app.post('/api/inventory', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const { name, unit, qty, parLevel, cost } = req.body;
+  if (!name) return res.status(400).json({ error: 'ingredient name required' });
+  const item = {
+    id: nanoid(8), name: String(name), unit: unit || 'unit',
+    qty: Number(qty) || 0, parLevel: Number(parLevel) || 0, cost: Number(cost) || 0,
+    tenantId: tid(req),
+  };
+  await store.createInventoryItem(item);
+  res.status(201).json(item);
+}));
+
+app.put('/api/inventory/:id', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const patch = {};
+  for (const k of ['name', 'unit', 'qty', 'parLevel', 'cost'])
+    if (req.body[k] != null) patch[k] = k === 'name' || k === 'unit' ? String(req.body[k]) : Number(req.body[k]);
+  const out = await store.updateInventoryItem(req.params.id, patch);
+  out ? res.json(out) : res.status(404).json({ error: 'not found' });
+}));
+
+// Quick stock movement: receive a delivery (+) or record waste/usage (−).
+app.post('/api/inventory/:id/adjust', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const delta = Number(req.body.delta);
+  if (!Number.isFinite(delta)) return res.status(400).json({ error: 'delta must be a number' });
+  const out = await store.adjustInventory(req.params.id, delta);
+  out ? res.json(out) : res.status(404).json({ error: 'not found' });
+}));
+
+app.delete('/api/inventory/:id', requireAuth, requireRole('manager'), h(async (req, res) => {
+  await store.deleteInventoryItem(req.params.id);
+  res.status(204).end();
 }));
 
 // ---- staff ----

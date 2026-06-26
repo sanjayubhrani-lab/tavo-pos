@@ -14,7 +14,8 @@ const DEFAULTS = {
   tables: [],      // {number, status, orderId}
   staff: [],       // {id, name, role, clockedInAt, tenantId}
   users: [],       // {id, name, role, pinHash, tenantId}  — login accounts
-  tenants: []      // {id, name, slug, plan, createdAt}  — businesses on the platform
+  tenants: [],     // {id, name, slug, plan, createdAt}  — businesses on the platform
+  inventory: []    // {id, name, unit, qty, parLevel, cost, tenantId}  — stock / ingredients
 };
 
 function ensureFile() {

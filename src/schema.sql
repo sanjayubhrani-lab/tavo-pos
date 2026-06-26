@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS menu (
   image      TEXT,
   sort_order INTEGER DEFAULT 0,
   modifier_groups JSONB DEFAULT '[]',
+  recipe     JSONB DEFAULT '[]',
   tenant_id  TEXT DEFAULT 'default',
   active     BOOLEAN DEFAULT TRUE
 );
