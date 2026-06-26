@@ -88,6 +88,21 @@ function priceLines(lines) {
   return { subtotal, tax, total: round(subtotal + tax) };
 }
 
+// Final settlement math: a check-level discount reduces the taxable subtotal
+// (like Toast/Square), a service charge is added, tax is on the discounted
+// subtotal, and tip is added last. Discounts are true price reductions;
+// gift cards are a tender and do NOT reduce the recorded sale total.
+function settle(lines, { discount = 0, serviceCharge = 0, tip = 0 } = {}) {
+  const sub = priceLines(lines).subtotal;
+  const disc = round(Math.min(sub, Math.max(0, Number(discount) || 0)));
+  const taxable = round(sub - disc);
+  const svc = round(Math.max(0, Number(serviceCharge) || 0));
+  const tax = round(taxable * TAX_RATE);
+  const t = round(Math.max(0, Number(tip) || 0));
+  const total = round(taxable + svc + tax + t);
+  return { subtotal: sub, discount: disc, serviceCharge: svc, tax, tip: t, total };
+}
+
 // Deplete ingredient stock for an order based on each menu item's recipe.
 // recipe = [{ invId, qty }]; consumed = qty × line.qty. Best-effort, never throws.
 async function depleteForOrder(order, tenantId = DEFAULT_TENANT) {
@@ -313,20 +328,24 @@ app.get('/api/products/lookup', requireAuth, h(async (req, res) => {
 // ---- tenant / business mode (retail vs restaurant) ----
 app.get('/api/tenant', requireAuth, h(async (req, res) => {
   const t = await store.getTenant(tid(req));
-  res.json(t ? { id: t.id, name: t.name, slug: t.slug, mode: t.mode || 'restaurant' } : { id: DEFAULT_TENANT, name: 'Tavo', slug: DEFAULT_TENANT, mode: 'restaurant' });
+  res.json(t ? { id: t.id, name: t.name, slug: t.slug, mode: t.mode || 'restaurant', settings: t.settings || {} } : { id: DEFAULT_TENANT, name: 'Tavo', slug: DEFAULT_TENANT, mode: 'restaurant', settings: {} });
 }));
 
 app.put('/api/tenant', requireAuth, requireRole('manager'), h(async (req, res) => {
   const patch = {};
   if (req.body.mode && ['restaurant', 'retail'].includes(req.body.mode)) patch.mode = req.body.mode;
   if (req.body.name) patch.name = String(req.body.name);
+  if (req.body.settings && typeof req.body.settings === 'object') {
+    const cur = await store.getTenant(tid(req));
+    patch.settings = { ...((cur && cur.settings) || {}), ...req.body.settings };
+  }
   let t = await store.updateTenant(tid(req), patch);
   if (!t) {
     // No tenant row yet (legacy default store) — create it, then apply.
-    await store.createTenant({ id: tid(req), name: patch.name || 'Tavo', slug: tid(req), plan: 'free', mode: patch.mode || 'restaurant', createdAt: Date.now() });
+    await store.createTenant({ id: tid(req), name: patch.name || 'Tavo', slug: tid(req), plan: 'free', mode: patch.mode || 'restaurant', settings: patch.settings || {}, createdAt: Date.now() });
     t = await store.getTenant(tid(req));
   }
-  res.json({ id: t.id, name: t.name, slug: t.slug, mode: t.mode || 'restaurant' });
+  res.json({ id: t.id, name: t.name, slug: t.slug, mode: t.mode || 'restaurant', settings: t.settings || {} });
 }));
 
 app.post('/api/menu', requireAuth, requireRole('manager'), h(async (req, res) => {
@@ -411,11 +430,15 @@ app.post('/api/payments/intent', requireAuth, requireRole('manager', 'server'), 
 
 // Step 2: record the completed payment + close the order/table
 app.post('/api/payments/complete', requireAuth, requireRole('manager', 'server'), h(async (req, res) => {
-  const { intentId, method = 'card', lines = [], tip = 0, orderId = null, table = null, customerId = null, pointsRedeemed = 0, discount = 0 } = req.body;
+  const { intentId, method = 'card', lines = [], tip = 0, orderId = null, table = null, customerId = null, pointsRedeemed = 0,
+    discount = 0, discountReason = null, serviceCharge = 0, comp = false } = req.body;
+  // Comps (zeroing or near-zeroing a check) require a manager.
+  const sub0 = priceLines(lines).subtotal;
+  if ((comp || (Number(discount) || 0) >= sub0 - 1e-9) && (Number(discount) || 0) > 0 && req.user.role !== 'manager')
+    return res.status(403).json({ error: 'comps require a manager' });
   const status = await retrieveStatus(intentId);
-  const totals = priceLines(lines);
-  const disc = Math.max(0, round(Number(discount) || 0));
-  const total = Math.max(0, round(totals.total + Number(tip || 0) - disc));
+  const totals = settle(lines, { discount, serviceCharge, tip });
+  const total = totals.total;
 
   // ---- loyalty: award points + apply any redemption to the attached member ----
   let pointsEarned = 0, member = null;
@@ -434,9 +457,10 @@ app.post('/api/payments/complete', requireAuth, requireRole('manager', 'server')
   }
 
   const payment = {
-    id: nanoid(10), orderId, table, lines, ...totals, tip: Number(tip || 0), total,
+    id: nanoid(10), orderId, table, lines, ...totals,
     method, status, stripeId: intentId || null, confirmed: false,
-    refundedAmount: 0, refundedAt: null, discount: disc,
+    refundedAmount: 0, refundedAt: null,
+    discountReason: totals.discount > 0 ? (discountReason || (comp ? 'Comp' : 'Discount')) : null,
     customerId: member ? member.id : null, pointsEarned, pointsRedeemed: member ? Math.round(Number(pointsRedeemed) || 0) : 0,
     tenantId: tid(req), createdAt: Date.now(),
   };
@@ -487,6 +511,9 @@ app.get('/api/reports/summary', requireAuth, requireRole('manager'), h(async (re
   const net = round(gross - refunds);
   const tips = round(pays.reduce((a, p) => a + p.tip, 0));
   const tax = round(pays.reduce((a, p) => a + p.tax, 0));
+  const discounts = round(pays.reduce((a, p) => a + (p.discount || 0), 0));
+  const serviceCharges = round(pays.reduce((a, p) => a + (p.serviceCharge || 0), 0));
+  const comps = pays.filter(p => (p.discount || 0) > 0 && String(p.discountReason || '').toLowerCase().includes('comp')).length;
   const orders = pays.length;
   const avgCheck = orders ? round(gross / orders) : 0;
   const byMethod = {};
@@ -509,7 +536,7 @@ app.get('/api/reports/summary', requireAuth, requireRole('manager'), h(async (re
   const lowStock = inventory.filter(i => i.qty <= (i.parLevel || 0)).map(i => ({ id: i.id, name: i.name, qty: i.qty, parLevel: i.parLevel, unit: i.unit }));
   const stockValue = round(inventory.reduce((a, i) => a + i.qty * i.cost, 0));
 
-  res.json({ gross, refunds, net, tips, tax, orders, avgCheck, byMethod, topSellers, openChecks,
+  res.json({ gross, refunds, net, tips, tax, discounts, serviceCharges, comps, orders, avgCheck, byMethod, topSellers, openChecks,
     foodCost, foodCostPct, grossProfit, lowStock, stockValue, inventoryCount: inventory.length });
 }));
 

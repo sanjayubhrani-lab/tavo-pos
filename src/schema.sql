@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS tenants (
   slug       TEXT UNIQUE,
   plan       TEXT DEFAULT 'free',
   mode       TEXT DEFAULT 'restaurant',
+  settings   JSONB DEFAULT '{}',
   created_at BIGINT
 );
 
