@@ -854,9 +854,10 @@ function pinKey(k){
   if(k==='⏎'){submitPin();return}
   if(pinBuf.length<6){pinBuf+=k;drawPin();if(pinBuf.length>=4){/* allow enter */}}
 }
+const TENANT_SLUG=new URLSearchParams(location.search).get('tenant')||'default';
 async function submitPin(){
   try{
-    const res=await api('/auth/login',{method:'POST',body:JSON.stringify({pin:pinBuf})});
+    const res=await api('/auth/login',{method:'POST',body:JSON.stringify({pin:pinBuf,tenant:TENANT_SLUG})});
     TOKEN=res.token;ME=res.user;localStorage.setItem('pp_token',TOKEN);
     pinBuf='';const scr=document.getElementById('loginScreen');if(scr)scr.remove();
     $("#app").style.display='flex';
