@@ -17,13 +17,14 @@ export function makeJsonStore() {
     async reset({ menu = [], tables = [], staff = [], users = [], inventory = [], tenants } = {}) {
       const db = read();
       db.menu = menu; db.tables = tables; db.staff = staff; db.users = users; db.inventory = inventory;
-      db.orders = []; db.payments = [];
+      db.orders = []; db.payments = []; db.customers = []; db.giftcards = [];
       db.tenants = tenants || [{ id: DEFAULT_TENANT, name: 'Default', slug: DEFAULT_TENANT, plan: 'free', createdAt: Date.now() }];
       write(db);
     },
 
     // ---- tenants ----
     async createTenant(t) { const db = read(); (db.tenants ||= []).push(t); write(db); return t; },
+    async updateTenant(id, patch) { const db = read(); const t = (db.tenants || []).find(x => x.id === id); if (!t) return null; Object.assign(t, patch); write(db); return t; },
     async getTenant(id) { return (read().tenants || []).find(t => t.id === id) || null; },
     async getTenantBySlug(slug) { return (read().tenants || []).find(t => t.slug === slug) || null; },
     async listTenants() { return read().tenants || []; },
@@ -40,6 +41,16 @@ export function makeJsonStore() {
     async createMenuItem(item) { const db = read(); db.menu.push(item); write(db); return item; },
     async updateMenuItem(id, patch) { const db = read(); const it = db.menu.find(m => m.id === id); if (!it) return null; Object.assign(it, patch); write(db); return it; },
     async deleteMenuItem(id) { const db = read(); db.menu = db.menu.filter(m => m.id !== id); write(db); },
+    // Retail stock: add `delta` to a product's stock, clamped at 0.
+    async adjustMenuStock(id, delta) {
+      const db = read(); const it = db.menu.find(m => m.id === id); if (!it) return null;
+      it.stock = Math.max(0, Math.round(((Number(it.stock) || 0) + Number(delta)) * 1000) / 1000);
+      write(db); return it;
+    },
+    async findProductByCode(code, tenantId) {
+      const k = String(code).trim();
+      return read().menu.filter(m => owns(m, tenantId)).find(m => (m.barcode && m.barcode === k) || (m.sku && String(m.sku).toUpperCase() === k.toUpperCase())) || null;
+    },
 
     // ---- tables (scoped; table numbers repeat per tenant) ----
     async listTables(tenantId) { return read().tables.filter(t => owns(t, tenantId)); },
@@ -82,5 +93,18 @@ export function makeJsonStore() {
       if (it.qty < 0) it.qty = 0;
       write(db); return it;
     },
+
+    // ---- customers / loyalty (scoped) ----
+    async listCustomers(tenantId) { return (read().customers || []).filter(c => owns(c, tenantId)).sort((a, b) => (b.points || 0) - (a.points || 0)); },
+    async getCustomer(id) { return (read().customers || []).find(c => c.id === id) || null; },
+    async findCustomerByPhone(phone, tenantId) { const p = String(phone).replace(/\D/g, ''); return (read().customers || []).find(c => owns(c, tenantId) && String(c.phone).replace(/\D/g, '') === p) || null; },
+    async createCustomer(c) { const db = read(); (db.customers ||= []).push(c); write(db); return c; },
+    async updateCustomer(id, patch) { const db = read(); const c = (db.customers ||= []).find(x => x.id === id); if (!c) return null; Object.assign(c, patch); write(db); return c; },
+
+    // ---- gift cards (scoped) ----
+    async listGiftCards(tenantId) { return (read().giftcards || []).filter(g => owns(g, tenantId)).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)); },
+    async getGiftCardByCode(code, tenantId) { const k = String(code).toUpperCase().replace(/[^A-Z0-9]/g, ''); return (read().giftcards || []).find(g => owns(g, tenantId) && String(g.code).toUpperCase().replace(/[^A-Z0-9]/g, '') === k) || null; },
+    async createGiftCard(g) { const db = read(); (db.giftcards ||= []).push(g); write(db); return g; },
+    async updateGiftCard(id, patch) { const db = read(); const g = (db.giftcards ||= []).find(x => x.id === id); if (!g) return null; Object.assign(g, patch); write(db); return g; },
   };
 }

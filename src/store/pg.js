@@ -12,8 +12,12 @@ const T = x => x || DEFAULT_TENANT;
 // ---- row mappers (snake_case DB → camelCase app objects) ----
 const num = v => (v == null ? v : Number(v));
 const mMenu = r => ({ id: r.id, category: r.category, name: r.name, price: num(r.price), emoji: r.emoji,
-  image: r.image ?? null, sortOrder: num(r.sort_order) || 0, modifierGroups: r.modifier_groups ?? [], recipe: r.recipe ?? [], active: r.active, tenantId: r.tenant_id ?? DEFAULT_TENANT });
+  image: r.image ?? null, sortOrder: num(r.sort_order) || 0, modifierGroups: r.modifier_groups ?? [], recipe: r.recipe ?? [],
+  sku: r.sku ?? null, barcode: r.barcode ?? null, stock: r.stock == null ? null : num(r.stock), trackStock: r.track_stock ?? false,
+  active: r.active, tenantId: r.tenant_id ?? DEFAULT_TENANT });
 const mInv = r => ({ id: r.id, name: r.name, unit: r.unit ?? 'unit', qty: num(r.qty) || 0, parLevel: num(r.par_level) || 0, cost: num(r.cost) || 0, tenantId: r.tenant_id ?? DEFAULT_TENANT });
+const mCust = r => ({ id: r.id, name: r.name, phone: r.phone, points: num(r.points) || 0, visits: num(r.visits) || 0, totalSpent: num(r.total_spent) || 0, tenantId: r.tenant_id ?? DEFAULT_TENANT, createdAt: num(r.created_at) });
+const mGift = r => ({ id: r.id, code: r.code, balance: num(r.balance) || 0, initialBalance: num(r.initial_balance) || 0, active: r.active, tenantId: r.tenant_id ?? DEFAULT_TENANT, createdAt: num(r.created_at) });
 const mTable = r => ({ number: num(r.number), status: r.status, orderId: r.order_id, tenantId: r.tenant_id ?? DEFAULT_TENANT });
 const mOrder = r => ({ id: r.id, number: num(r.number), table: r.table_no == null ? null : num(r.table_no),
   lines: r.lines, subtotal: num(r.subtotal), tax: num(r.tax), total: num(r.total),
@@ -27,13 +31,13 @@ const mPay = r => ({ id: r.id, orderId: r.order_id, table: r.table_no == null ? 
   createdAt: num(r.created_at), tenantId: r.tenant_id ?? DEFAULT_TENANT });
 const mUser = r => ({ id: r.id, name: r.name, role: r.role, pinHash: r.pin_hash, tenantId: r.tenant_id ?? DEFAULT_TENANT });
 const mStaff = r => ({ id: r.id, name: r.name, role: r.role, clockedInAt: r.clocked_in_at == null ? null : num(r.clocked_in_at), tenantId: r.tenant_id ?? DEFAULT_TENANT });
-const mTenant = r => ({ id: r.id, name: r.name, slug: r.slug, plan: r.plan, createdAt: num(r.created_at) });
+const mTenant = r => ({ id: r.id, name: r.name, slug: r.slug, plan: r.plan, mode: r.mode ?? 'restaurant', createdAt: num(r.created_at) });
 
 // Insert one tenant's rows (stamped with tenant_id) without wiping others.
 async function insertSeed(q, { menu = [], tables = [], staff = [], users = [], inventory = [] }) {
   for (const m of menu)
-    await q('INSERT INTO menu(id,category,name,price,emoji,image,sort_order,modifier_groups,recipe,active,tenant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
-      [m.id, m.category, m.name, m.price, m.emoji, m.image ?? null, m.sortOrder ?? 0, JSON.stringify(m.modifierGroups ?? []), JSON.stringify(m.recipe ?? []), m.active, T(m.tenantId)]);
+    await q('INSERT INTO menu(id,category,name,price,emoji,image,sort_order,modifier_groups,recipe,sku,barcode,stock,track_stock,active,tenant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)',
+      [m.id, m.category, m.name, m.price, m.emoji, m.image ?? null, m.sortOrder ?? 0, JSON.stringify(m.modifierGroups ?? []), JSON.stringify(m.recipe ?? []), m.sku ?? null, m.barcode ?? null, m.stock ?? null, m.trackStock ?? false, m.active, T(m.tenantId)]);
   for (const t of tables)
     await q('INSERT INTO tables(number,status,order_id,tenant_id) VALUES($1,$2,$3,$4)', [t.number, t.status, t.orderId, T(t.tenantId)]);
   for (const s of staff)
@@ -90,14 +94,35 @@ export async function makePgStore(poolOverride) {
            id TEXT PRIMARY KEY, name TEXT NOT NULL, unit TEXT DEFAULT 'unit',
            qty NUMERIC(12,3) DEFAULT 0, par_level NUMERIC(12,3) DEFAULT 0,
            cost NUMERIC(10,4) DEFAULT 0, tenant_id TEXT DEFAULT 'default')`,
+        // loyalty + gift cards
+        `CREATE TABLE IF NOT EXISTS customers (
+           id TEXT PRIMARY KEY, name TEXT, phone TEXT, points INTEGER DEFAULT 0,
+           visits INTEGER DEFAULT 0, total_spent NUMERIC(12,2) DEFAULT 0,
+           tenant_id TEXT DEFAULT 'default', created_at BIGINT)`,
+        `CREATE TABLE IF NOT EXISTS giftcards (
+           id TEXT PRIMARY KEY, code TEXT, balance NUMERIC(10,2) DEFAULT 0,
+           initial_balance NUMERIC(10,2) DEFAULT 0, active BOOLEAN DEFAULT TRUE,
+           tenant_id TEXT DEFAULT 'default', created_at BIGINT)`,
+        // retail mode: business type + product SKU/barcode/stock
+        "ALTER TABLE tenants ADD COLUMN mode TEXT DEFAULT 'restaurant'",
+        'ALTER TABLE menu ADD COLUMN sku TEXT',
+        'ALTER TABLE menu ADD COLUMN barcode TEXT',
+        'ALTER TABLE menu ADD COLUMN stock NUMERIC(12,3)',
+        'ALTER TABLE menu ADD COLUMN track_stock BOOLEAN DEFAULT FALSE',
       ];
       for (const u of upgrades) { try { await q(u); } catch { /* column already present */ } }
     },
 
     // ---- tenants ----
     async createTenant(t) {
-      await q('INSERT INTO tenants(id,name,slug,plan,created_at) VALUES($1,$2,$3,$4,$5)', [t.id, t.name, t.slug, t.plan ?? 'free', t.createdAt ?? Date.now()]);
+      await q('INSERT INTO tenants(id,name,slug,plan,mode,created_at) VALUES($1,$2,$3,$4,$5,$6)', [t.id, t.name, t.slug, t.plan ?? 'free', t.mode ?? 'restaurant', t.createdAt ?? Date.now()]);
       return t;
+    },
+    async updateTenant(id, patch) {
+      const cur = (await q('SELECT * FROM tenants WHERE id=$1', [id])).rows[0];
+      if (!cur) return null; const n = { ...mTenant(cur), ...patch };
+      await q('UPDATE tenants SET name=$2,mode=$3 WHERE id=$1', [id, n.name, n.mode ?? 'restaurant']);
+      return n;
     },
     async getTenant(id) { const r = (await q('SELECT * FROM tenants WHERE id=$1', [id])).rows[0]; return r ? mTenant(r) : null; },
     async getTenantBySlug(slug) { const r = (await q('SELECT * FROM tenants WHERE slug=$1', [slug])).rows[0]; return r ? mTenant(r) : null; },
@@ -105,29 +130,39 @@ export async function makePgStore(poolOverride) {
     async seedTenant(data) { await insertSeed(q, data); },
 
     async reset({ menu = [], tables = [], staff = [], users = [], inventory = [], tenants } = {}) {
-      for (const t of ['menu', 'tables', 'orders', 'payments', 'users', 'staff', 'inventory', 'tenants'])
+      for (const t of ['menu', 'tables', 'orders', 'payments', 'users', 'staff', 'inventory', 'customers', 'giftcards', 'tenants'])
         await q(`DELETE FROM ${t}`);
-      const tlist = tenants || [{ id: DEFAULT_TENANT, name: 'Default', slug: DEFAULT_TENANT, plan: 'free', createdAt: Date.now() }];
+      const tlist = tenants || [{ id: DEFAULT_TENANT, name: 'Default', slug: DEFAULT_TENANT, plan: 'free', mode: 'restaurant', createdAt: Date.now() }];
       for (const t of tlist)
-        await q('INSERT INTO tenants(id,name,slug,plan,created_at) VALUES($1,$2,$3,$4,$5)', [t.id, t.name, t.slug, t.plan ?? 'free', t.createdAt ?? Date.now()]);
+        await q('INSERT INTO tenants(id,name,slug,plan,mode,created_at) VALUES($1,$2,$3,$4,$5,$6)', [t.id, t.name, t.slug, t.plan ?? 'free', t.mode ?? 'restaurant', t.createdAt ?? Date.now()]);
       await insertSeed(q, { menu, tables, staff, users, inventory });
     },
 
     // menu (tenant-scoped)
     async listMenu(tenantId) { return (await q('SELECT * FROM menu WHERE tenant_id=$1 ORDER BY sort_order, category, name', [T(tenantId)])).rows.map(mMenu); },
     async createMenuItem(i) {
-      await q('INSERT INTO menu(id,category,name,price,emoji,image,sort_order,modifier_groups,recipe,active,tenant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
-        [i.id, i.category, i.name, i.price, i.emoji, i.image ?? null, i.sortOrder ?? 0, JSON.stringify(i.modifierGroups ?? []), JSON.stringify(i.recipe ?? []), i.active, T(i.tenantId)]);
+      await q('INSERT INTO menu(id,category,name,price,emoji,image,sort_order,modifier_groups,recipe,sku,barcode,stock,track_stock,active,tenant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)',
+        [i.id, i.category, i.name, i.price, i.emoji, i.image ?? null, i.sortOrder ?? 0, JSON.stringify(i.modifierGroups ?? []), JSON.stringify(i.recipe ?? []), i.sku ?? null, i.barcode ?? null, i.stock ?? null, i.trackStock ?? false, i.active, T(i.tenantId)]);
       return i;
     },
     async updateMenuItem(id, patch) {
       const cur = (await q('SELECT * FROM menu WHERE id=$1', [id])).rows[0];
       if (!cur) return null; const n = { ...mMenu(cur), ...patch };
-      await q('UPDATE menu SET category=$2,name=$3,price=$4,emoji=$5,image=$6,sort_order=$7,modifier_groups=$8,recipe=$9,active=$10 WHERE id=$1',
-        [id, n.category, n.name, n.price, n.emoji, n.image ?? null, n.sortOrder ?? 0, JSON.stringify(n.modifierGroups ?? []), JSON.stringify(n.recipe ?? []), n.active]);
+      await q('UPDATE menu SET category=$2,name=$3,price=$4,emoji=$5,image=$6,sort_order=$7,modifier_groups=$8,recipe=$9,sku=$10,barcode=$11,stock=$12,track_stock=$13,active=$14 WHERE id=$1',
+        [id, n.category, n.name, n.price, n.emoji, n.image ?? null, n.sortOrder ?? 0, JSON.stringify(n.modifierGroups ?? []), JSON.stringify(n.recipe ?? []), n.sku ?? null, n.barcode ?? null, n.stock ?? null, n.trackStock ?? false, n.active]);
       return n;
     },
     async deleteMenuItem(id) { await q('DELETE FROM menu WHERE id=$1', [id]); },
+    // Atomically add `delta` to a product's stock (retail). Clamps at 0. Returns the product.
+    async adjustMenuStock(id, delta) {
+      const r = (await q('UPDATE menu SET stock = GREATEST(0, COALESCE(stock,0) + $2) WHERE id=$1 RETURNING *', [id, delta])).rows[0];
+      return r ? mMenu(r) : null;
+    },
+    async findProductByCode(code, tenantId) {
+      const k = String(code).trim();
+      const rows = (await q('SELECT * FROM menu WHERE tenant_id=$1', [T(tenantId)])).rows.map(mMenu);
+      return rows.find(m => (m.barcode && m.barcode === k) || (m.sku && m.sku.toUpperCase() === k.toUpperCase())) || null;
+    },
 
     // tables (tenant-scoped)
     async listTables(tenantId) { return (await q('SELECT * FROM tables WHERE tenant_id=$1 ORDER BY number', [T(tenantId)])).rows.map(mTable); },
@@ -206,6 +241,49 @@ export async function makePgStore(poolOverride) {
     async adjustInventory(id, delta) {
       const r = (await q('UPDATE inventory SET qty = GREATEST(0, qty + $2) WHERE id=$1 RETURNING *', [id, delta])).rows[0];
       return r ? mInv(r) : null;
+    },
+
+    // customers / loyalty (tenant-scoped)
+    async listCustomers(tenantId) { return (await q('SELECT * FROM customers WHERE tenant_id=$1 ORDER BY points DESC', [T(tenantId)])).rows.map(mCust); },
+    async getCustomer(id) { const r = (await q('SELECT * FROM customers WHERE id=$1', [id])).rows[0]; return r ? mCust(r) : null; },
+    async findCustomerByPhone(phone, tenantId) {
+      const p = String(phone).replace(/\D/g, '');
+      const rows = (await q('SELECT * FROM customers WHERE tenant_id=$1', [T(tenantId)])).rows;
+      const r = rows.find(x => String(x.phone || '').replace(/\D/g, '') === p);
+      return r ? mCust(r) : null;
+    },
+    async createCustomer(c) {
+      await q('INSERT INTO customers(id,name,phone,points,visits,total_spent,tenant_id,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',
+        [c.id, c.name, c.phone, c.points ?? 0, c.visits ?? 0, c.totalSpent ?? 0, T(c.tenantId), c.createdAt ?? Date.now()]);
+      return c;
+    },
+    async updateCustomer(id, patch) {
+      const cur = (await q('SELECT * FROM customers WHERE id=$1', [id])).rows[0];
+      if (!cur) return null; const n = { ...mCust(cur), ...patch };
+      await q('UPDATE customers SET name=$2,phone=$3,points=$4,visits=$5,total_spent=$6 WHERE id=$1',
+        [id, n.name, n.phone, n.points ?? 0, n.visits ?? 0, n.totalSpent ?? 0]);
+      return n;
+    },
+
+    // gift cards (tenant-scoped)
+    async listGiftCards(tenantId) { return (await q('SELECT * FROM giftcards WHERE tenant_id=$1 ORDER BY created_at DESC', [T(tenantId)])).rows.map(mGift); },
+    async getGiftCardByCode(code, tenantId) {
+      const k = String(code).toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const rows = (await q('SELECT * FROM giftcards WHERE tenant_id=$1', [T(tenantId)])).rows;
+      const r = rows.find(x => String(x.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '') === k);
+      return r ? mGift(r) : null;
+    },
+    async createGiftCard(g) {
+      await q('INSERT INTO giftcards(id,code,balance,initial_balance,active,tenant_id,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)',
+        [g.id, g.code, g.balance ?? 0, g.initialBalance ?? g.balance ?? 0, g.active ?? true, T(g.tenantId), g.createdAt ?? Date.now()]);
+      return g;
+    },
+    async updateGiftCard(id, patch) {
+      const cur = (await q('SELECT * FROM giftcards WHERE id=$1', [id])).rows[0];
+      if (!cur) return null; const n = { ...mGift(cur), ...patch };
+      await q('UPDATE giftcards SET code=$2,balance=$3,initial_balance=$4,active=$5 WHERE id=$1',
+        [id, n.code, n.balance ?? 0, n.initialBalance ?? 0, n.active ?? true]);
+      return n;
     },
   };
 }
