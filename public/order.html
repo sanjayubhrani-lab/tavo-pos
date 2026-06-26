@@ -106,6 +106,26 @@
   @keyframes sp{to{transform:rotate(360deg)}}
   .err{background:rgba(255,80,80,.12);border:1px solid #5a2330;color:#ffb4b4;
     border-radius:12px;padding:12px;margin:12px 0;font-size:14px;display:none}
+  /* ---- kiosk mode: bigger touch targets, wider layout, attract screen ---- */
+  body.kiosk .wrap{max-width:920px}
+  body.kiosk .iname{font-size:20px}
+  body.kiosk .add{font-size:17px;padding:12px 20px;border-radius:12px}
+  body.kiosk .emoji{width:68px;height:68px;font-size:34px}
+  body.kiosk .cat{font-size:17px;padding:11px 20px}
+  body.kiosk .cartbtn{padding:20px;font-size:20px}
+  body.kiosk .item{padding:16px}
+  body.kiosk .sheet{max-width:760px;max-height:92vh}
+  body.kiosk .primary,body.kiosk .ghost{padding:18px;font-size:18px}
+  #attract{position:fixed;inset:0;z-index:80;background:radial-gradient(circle at 50% 35%,#15233b,#0b0f17 70%);
+    display:none;flex-direction:column;align-items:center;justify-content:center;text-align:center;cursor:pointer;padding:24px}
+  body.kiosk.attract-on #attract{display:flex}
+  #attract .biglogo{width:120px;height:120px;border-radius:30px;background:linear-gradient(135deg,var(--brand),var(--brand2));
+    display:grid;place-items:center;font-weight:800;font-size:64px;color:#fff;box-shadow:var(--shadow);margin-bottom:26px}
+  #attract h1{font-size:44px;margin:0 0 10px}
+  #attract p{font-size:20px;color:var(--muted);margin:0 0 38px}
+  #attract .tap{background:var(--brand);color:#fff;border:none;border-radius:18px;padding:22px 56px;
+    font-size:24px;font-weight:800;box-shadow:var(--shadow);animation:pulse 2s ease-in-out infinite}
+  @keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.05)}}
 </style>
 </head>
 <body>
@@ -131,11 +151,21 @@
   <!-- Cart sheet -->
   <div class="sheet" id="cartSheet"></div>
 
+  <!-- Kiosk attract / welcome screen -->
+  <div id="attract" onclick="startKiosk()">
+    <div class="biglogo" id="attractLogo">T</div>
+    <h1 id="attractTitle">Welcome</h1>
+    <p>Order &amp; pay right here — no waiting in line</p>
+    <button class="tap">Tap to start your order →</button>
+  </div>
+
 <script>
 const API = '';                       // same-origin
 const params = new URLSearchParams(location.search);
 const TENANT = params.get('tenant') || 'default';
-const TABLE  = params.get('table');   // may be null (takeout)
+const KIOSK  = params.get('kiosk') === '1';   // unattended counter self-order
+let TABLE    = params.get('table');   // may be null (takeout / kiosk pickup)
+if (KIOSK) { TABLE = null; document.body.classList.add('kiosk'); }
 const money = n => '$' + (Math.round(n*100)/100).toFixed(2);
 
 let CFG = null, MENU = [], CATS = [], CART = [], current = null, tipPct = 0;
@@ -152,8 +182,17 @@ async function boot(){
     CATS = [...new Set(MENU.map(i=>i.category||'Other'))];
     if(CFG.publishableKey && window.Stripe){ try{ stripe = Stripe(CFG.publishableKey); }catch(e){} }
     render();
+    if(KIOSK) showAttract();
   }catch(e){ fail('Could not load the menu. Please check the link or try again.'); }
 }
+function showAttract(){
+  const name=(CFG&&CFG.tenant&&CFG.tenant.name)||'Tavo';
+  document.getElementById('attractLogo').textContent=name.trim().charAt(0).toUpperCase();
+  document.getElementById('attractTitle').textContent='Welcome to '+name;
+  document.body.classList.add('attract-on');
+  window.scrollTo(0,0);
+}
+function startKiosk(){ document.body.classList.remove('attract-on'); }
 function fail(msg){
   document.getElementById('app').innerHTML =
     '<div class="wrap center"><div class="logo" style="margin:40px auto 16px">T</div>'+
@@ -169,7 +208,7 @@ function render(){
         <div class="logo">${(CFG.tenant.name||'T').trim().charAt(0).toUpperCase()}</div>
         <div><div class="biz">${esc(CFG.tenant.name||'Tavo')}</div>
           <div class="sub">Order &amp; pay from your phone</div></div>
-        ${TABLE?`<div class="tablechip">Table ${esc(TABLE)}</div>`:`<div class="tablechip">Takeout</div>`}
+        ${TABLE?`<div class="tablechip">Table ${esc(TABLE)}</div>`:`<div class="tablechip">${KIOSK?'Self-order':'Takeout'}</div>`}
       </div>
       <div class="cats" id="cats">${CATS.map((c,i)=>`<div class="cat${i===0?' on':''}" data-c="${esc(c)}" onclick="jump('${esc(c)}',this)">${esc(c)}</div>`).join('')}</div>
     </div></header>
@@ -389,16 +428,27 @@ function setBusy(b){
 }
 function done(order, paid){
   CART=[]; syncCart();
+  const where = TABLE?('Table '+esc(TABLE)):(KIOSK?'Pickup at counter':'Takeout');
+  const pickup = KIOSK ? `<div style="font-size:40px;font-weight:800;color:var(--brand);margin:6px 0 2px">#${order.number}</div><p class="note" style="margin-top:0">Listen for your number at the counter</p>` : '';
   document.getElementById('app').innerHTML = `<div class="wrap center">
     <div class="check">✓</div>
     <h2>${paid?'Payment received':'Order placed'}</h2>
-    <p class="note">Order #${order.number} · ${money(order.total)}<br>
-    ${paid?'Your order is on its way to the kitchen.':'Flag your server when ready to pay.'}<br>
-    ${TABLE?('Table '+esc(TABLE)):'Takeout'} · ${esc(CFG.tenant.name||'Tavo')}</p>
-    <button class="primary" style="max-width:240px;margin:18px auto 0" onclick="location.reload()">Order more</button>
+    ${pickup}
+    <p class="note">${KIOSK?'':('Order #'+order.number+' · ')}${money(order.total)}<br>
+    ${paid?(KIOSK?'Your order is being prepared.':'Your order is on its way to the kitchen.'):'Flag your server when ready to pay.'}<br>
+    ${where} · ${esc(CFG.tenant.name||'Tavo')}</p>
+    <button class="primary" style="max-width:280px;margin:18px auto 0" onclick="${KIOSK?'kioskReset()':'location.reload()'}">${KIOSK?'Start a new order':'Order more'}</button>
+    ${KIOSK?'<p class="note" id="kioskCountdown" style="margin-top:14px"></p>':''}
   </div>`;
   closeSheets(); window.scrollTo(0,0);
+  if(KIOSK){
+    let s=12; const el=()=>document.getElementById('kioskCountdown');
+    if(el()) el().textContent='Returning to start in '+s+'s…';
+    clearInterval(window._kioskIv);
+    window._kioskIv=setInterval(()=>{ s--; if(el())el().textContent='Returning to start in '+s+'s…'; if(s<=0){clearInterval(window._kioskIv);kioskReset();} },1000);
+  }
 }
+function kioskReset(){ clearInterval(window._kioskIv); location.reload(); }
 
 /* ---------- sheet plumbing ---------- */
 function showSheet(s){ document.getElementById('scrim').style.display='block';

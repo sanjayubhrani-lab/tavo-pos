@@ -676,6 +676,8 @@ async function simulateOrder(platform){
 function guestSlug(){ return (ME&&ME.tenantSlug) || (typeof TENANT_SLUG!=='undefined'&&TENANT_SLUG) || 'default'; }
 function guestBase(){ return (IS_NATIVE?BACKEND_URL:location.origin); }
 function guestUrl(table){ const s=guestSlug(); let u=guestBase()+'/order.html?tenant='+encodeURIComponent(s); if(table!=null) u+='&table='+encodeURIComponent(table); return u; }
+function kioskUrl(){ return guestBase()+'/order.html?tenant='+encodeURIComponent(guestSlug())+'&kiosk=1'; }
+function launchKiosk(){ const w=window.open(kioskUrl(),'_blank'); if(!w){toast('Allow pop-ups to launch the kiosk');} }
 async function qrView(){
   const tables=await api('/tables').catch(()=>cacheGet('/tables')||[]);
   window._qrTables=tables;
@@ -695,6 +697,15 @@ async function qrView(){
         <button class="btn" style="flex:0;padding:11px 18px" onclick="printAllQRs()">🖨 Print all table codes</button>
         <button class="btn ghost" style="flex:0;padding:11px 18px" onclick="window.open(guestUrl(null),'_blank')">👁 Preview guest page</button>
         <button class="btn ghost" style="flex:0;padding:11px 18px" onclick="copyLink(guestUrl(null))">🔗 Copy takeout link</button>
+      </div></div>
+    <div class="card" style="margin-bottom:16px;border-color:#a855f7">
+      <div class="sec-title" style="color:#c084fc">🖥️ Self-order kiosk mode</div>
+      <p style="font-size:13px;color:var(--mut);line-height:1.7;margin:0 0 12px">
+        Turn any tablet or touchscreen into an unattended counter kiosk. Full-screen welcome, big buttons,
+        pay by card, and an order number — then it resets for the next customer automatically.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" style="flex:0;padding:11px 18px;background:#a855f7" onclick="launchKiosk()">🖥️ Launch kiosk</button>
+        <button class="btn ghost" style="flex:0;padding:11px 18px" onclick="copyLink(kioskUrl())">🔗 Copy kiosk link</button>
       </div></div>
     <div class="sec-title">Table codes (${tables.length})</div>
     <div class="qrgrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px">${tableCards||'<div class="empty">No tables yet.</div>'}</div>`;
