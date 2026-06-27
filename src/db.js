@@ -18,7 +18,8 @@ const DEFAULTS = {
   inventory: [],   // {id, name, unit, qty, parLevel, cost, tenantId}  — stock / ingredients
   customers: [],   // {id, name, phone, points, visits, totalSpent, tenantId, createdAt}  — loyalty members
   giftcards: [],   // {id, code, balance, initialBalance, active, tenantId, createdAt}  — gift cards
-  drawers: []      // {id, openedBy, openedAt, startingFloat, paidIn, paidOut, status, ...}  — cash drawer sessions
+  drawers: [],     // {id, openedBy, openedAt, startingFloat, paidIn, paidOut, status, ...}  — cash drawer sessions
+  shifts: []       // {id, userId, name, role, clockIn, clockOut, breakMins, wage, status, tenantId}  — time clock
 };
 
 function ensureFile() {

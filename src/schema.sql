@@ -139,5 +139,18 @@ CREATE TABLE IF NOT EXISTS drawers (
   tenant_id      TEXT DEFAULT 'default'
 );
 
+CREATE TABLE IF NOT EXISTS shifts (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT,
+  name       TEXT,
+  role       TEXT,
+  clock_in   BIGINT,
+  clock_out  BIGINT,
+  break_mins INTEGER DEFAULT 0,
+  wage       NUMERIC(10,2) DEFAULT 0,
+  status     TEXT DEFAULT 'open',
+  tenant_id  TEXT DEFAULT 'default'
+);
+
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_payments_stripe ON payments(stripe_id);

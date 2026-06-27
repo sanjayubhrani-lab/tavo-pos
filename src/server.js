@@ -612,8 +612,19 @@ app.get('/api/reports/summary', requireAuth, requireRole('manager'), h(async (re
   const lowStock = inventory.filter(i => i.qty <= (i.parLevel || 0)).map(i => ({ id: i.id, name: i.name, qty: i.qty, parLevel: i.parLevel, unit: i.unit }));
   const stockValue = round(inventory.reduce((a, i) => a + i.qty * i.cost, 0));
 
+  // ---- labor (today) ----
+  const st = (() => { const x = new Date(); x.setHours(0, 0, 0, 0); return x.getTime(); })();
+  const shifts = await store.listShifts(tid(req));
+  const todayShifts = shifts.filter(s => (s.clockIn || 0) >= st);
+  const laborHours = round(todayShifts.reduce((a, s) => a + shiftHours(s), 0));
+  const laborCost = round(todayShifts.reduce((a, s) => a + shiftHours(s) * (s.wage || 0), 0));
+  const todayGross = round(pays.filter(p => p.createdAt >= st).reduce((a, p) => a + (p.total || 0), 0));
+  const laborPct = todayGross > 0 ? round((laborCost / todayGross) * 100) : 0;
+  const clockedIn = shifts.filter(s => s.status === 'open').length;
+
   res.json({ gross, refunds, net, tips, tax, discounts, serviceCharges, comps, orders, avgCheck, byMethod, topSellers, openChecks,
-    foodCost, foodCostPct, grossProfit, lowStock, stockValue, inventoryCount: inventory.length });
+    foodCost, foodCostPct, grossProfit, lowStock, stockValue, inventoryCount: inventory.length,
+    laborCost, laborHours, laborPct, clockedIn });
 }));
 
 // ---- delivery-platform integrations (DoorDash / Uber Eats / Grubhub / aggregators) ----
@@ -896,6 +907,68 @@ app.post('/api/drawer/close', requireAuth, requireRole('manager'), h(async (req,
 }));
 
 app.get('/api/drawers', requireAuth, requireRole('manager'), h(async (req, res) => res.json(await store.listDrawers(tid(req)))));
+
+// ---- time clock (shifts) ----
+// Net paid hours for a shift, capping the open end at `end`.
+function shiftHours(s, end = Date.now()) {
+  const out = s.clockOut || end;
+  return Math.max(0, (out - s.clockIn) / 3600000 - (s.breakMins || 0) / 60);
+}
+
+app.get('/api/shifts/me', requireAuth, h(async (req, res) => {
+  const open = await store.getOpenShiftFor(req.user.id, tid(req));
+  const mine = (await store.listShifts(tid(req))).filter(s => s.userId === req.user.id).slice(0, 10);
+  res.json({ open, recent: mine });
+}));
+
+app.post('/api/shifts/clock-in', requireAuth, h(async (req, res) => {
+  if (await store.getOpenShiftFor(req.user.id, tid(req))) return res.status(409).json({ error: "you're already clocked in" });
+  const t = await store.getTenant(tid(req));
+  const wages = (t && t.settings && t.settings.wages) || {};
+  const wage = Number(wages[req.user.name]) || 0;
+  const s = { id: nanoid(10), userId: req.user.id, name: req.user.name, role: req.user.role, clockIn: Date.now(), clockOut: null, breakMins: 0, wage, status: 'open', tenantId: tid(req) };
+  await store.createShift(s);
+  res.status(201).json(s);
+}));
+
+// Add break minutes to the open shift (e.g. a 30-minute lunch).
+app.post('/api/shifts/break', requireAuth, h(async (req, res) => {
+  const s = await store.getOpenShiftFor(req.user.id, tid(req));
+  if (!s) return res.status(400).json({ error: "you're not clocked in" });
+  const mins = Math.max(0, Math.round(Number(req.body.mins) || 0));
+  res.json(await store.updateShift(s.id, { breakMins: (s.breakMins || 0) + mins }));
+}));
+
+app.post('/api/shifts/clock-out', requireAuth, h(async (req, res) => {
+  const s = await store.getOpenShiftFor(req.user.id, tid(req));
+  if (!s) return res.status(400).json({ error: "you're not clocked in" });
+  const out = await store.updateShift(s.id, { clockOut: Date.now(), status: 'closed' });
+  res.json({ ...out, hours: round(shiftHours(out)), pay: round(shiftHours(out) * (out.wage || 0)) });
+}));
+
+// Manager: all shifts (active + history).
+app.get('/api/shifts', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const shifts = await store.listShifts(tid(req));
+  res.json(shifts.map(s => ({ ...s, hours: round(shiftHours(s)), pay: round(shiftHours(s) * (s.wage || 0)) })));
+}));
+
+// Tip pool: split the day's tips across staff by hours worked that day.
+app.get('/api/tips/pool', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const d = req.query.date ? new Date(req.query.date + 'T00:00:00') : new Date();
+  const start = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const end = start + 86400000;
+  const inDay = t => t != null && t >= start && t < end;
+  const pays = (await store.listPayments(tid(req))).filter(p => inDay(p.createdAt));
+  const totalTips = round(pays.reduce((a, p) => a + (p.tip || 0), 0));
+  const shifts = (await store.listShifts(tid(req))).filter(s => inDay(s.clockIn));
+  const byPerson = {};
+  shifts.forEach(s => { byPerson[s.name] = (byPerson[s.name] || 0) + shiftHours(s, end); });
+  const totalHours = Object.values(byPerson).reduce((a, h) => a + h, 0);
+  const splits = Object.entries(byPerson).map(([name, hours]) => ({
+    name, hours: round(hours), amount: totalHours > 0 ? round(totalTips * hours / totalHours) : 0,
+  })).sort((a, b) => b.amount - a.amount);
+  res.json({ date: new Date(start).toISOString().slice(0, 10), totalTips, totalHours: round(totalHours), splits });
+}));
 
 // ---- staff ----
 app.get('/api/staff', requireAuth, requireRole('manager'), h(async (req, res) => res.json(await store.listStaff(tid(req)))));
