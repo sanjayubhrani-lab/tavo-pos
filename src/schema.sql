@@ -23,6 +23,10 @@ CREATE TABLE IF NOT EXISTS menu (
   barcode    TEXT,
   stock      NUMERIC(12,3),
   track_stock BOOLEAN DEFAULT FALSE,
+  tax_rate   NUMERIC(6,4),
+  schedule   JSONB,
+  is_combo   BOOLEAN DEFAULT FALSE,
+  combo_items JSONB DEFAULT '[]',
   tenant_id  TEXT DEFAULT 'default',
   active     BOOLEAN DEFAULT TRUE
 );

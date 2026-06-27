@@ -77,30 +77,38 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 
 // ---- helpers ----
 const round = n => Math.round(n * 100) / 100;
+// Tax is computed per line so items can carry their own rate (e.g. alcohol,
+// non-taxable groceries). Lines without a taxRate fall back to the tenant default.
 function priceLines(lines) {
-  const subtotal = round(lines.reduce((a, l) => {
+  let subtotal = 0, taxFull = 0;
+  for (const l of (lines || [])) {
     const mods = (l.mods || []).reduce((s, m) => {
       const x = String(m).match(/\+\$([0-9.]+)/); return s + (x ? parseFloat(x[1]) : 0);
     }, 0);
-    return a + (l.price + mods) * l.qty;
-  }, 0));
-  const tax = round(subtotal * TAX_RATE);
-  return { subtotal, tax, total: round(subtotal + tax) };
+    const lineSub = (l.price + mods) * l.qty;
+    subtotal += lineSub;
+    const rate = (l.taxRate != null && l.taxRate !== '') ? Number(l.taxRate) : TAX_RATE;
+    taxFull += lineSub * rate;
+  }
+  subtotal = round(subtotal);
+  const effRate = subtotal > 0 ? taxFull / subtotal : TAX_RATE;
+  return { subtotal, tax: round(taxFull), total: round(subtotal + taxFull), effRate };
 }
 
 // Final settlement math: a check-level discount reduces the taxable subtotal
 // (like Toast/Square), a service charge is added, tax is on the discounted
 // subtotal, and tip is added last. Discounts are true price reductions;
 // gift cards are a tender and do NOT reduce the recorded sale total.
-function settle(lines, { discount = 0, serviceCharge = 0, tip = 0 } = {}) {
-  const sub = priceLines(lines).subtotal;
+function settle(lines, { discount = 0, serviceCharge = 0, tip = 0, taxExempt = false } = {}) {
+  const pl = priceLines(lines);
+  const sub = pl.subtotal;
   const disc = round(Math.min(sub, Math.max(0, Number(discount) || 0)));
   const taxable = round(sub - disc);
   const svc = round(Math.max(0, Number(serviceCharge) || 0));
-  const tax = round(taxable * TAX_RATE);
+  const tax = taxExempt ? 0 : round(taxable * pl.effRate);
   const t = round(Math.max(0, Number(tip) || 0));
   const total = round(taxable + svc + tax + t);
-  return { subtotal: sub, discount: disc, serviceCharge: svc, tax, tip: t, total };
+  return { subtotal: sub, discount: disc, serviceCharge: svc, tax, tip: t, total, taxExempt: !!taxExempt };
 }
 
 // Deplete ingredient stock for an order based on each menu item's recipe.
@@ -143,6 +151,21 @@ function orderFoodCost(lines, recipeOf, costOf) {
     for (const r of recipe) c += (Number(costOf.get(r.invId)) || 0) * (Number(r.qty) || 0) * (Number(l.qty) || 1);
   }
   return round(c);
+}
+
+// Dayparting: is this item available at `now` per its schedule {days,start,end}?
+function availableNow(item, now = new Date()) {
+  const s = item && item.schedule;
+  if (!s || (!s.start && !s.end && (!Array.isArray(s.days) || !s.days.length))) return true;
+  if (Array.isArray(s.days) && s.days.length && !s.days.includes(now.getDay())) return false;
+  if (s.start || s.end) {
+    const mins = now.getHours() * 60 + now.getMinutes();
+    const toM = t => { const p = String(t).split(':'); return (Number(p[0]) || 0) * 60 + (Number(p[1]) || 0); };
+    const a = s.start ? toM(s.start) : 0, b = s.end ? toM(s.end) : 1440;
+    if (a <= b) { if (mins < a || mins >= b) return false; }
+    else if (mins < a && mins >= b) return false;   // overnight window
+  }
+  return true;
 }
 
 // ---- config / health ----
@@ -226,7 +249,7 @@ app.get('/api/guest/config', h(async (req, res) => {
 app.get('/api/guest/menu', h(async (req, res) => {
   const t = await resolveTenant(req.query.tenant);
   if (!t) return res.status(404).json({ error: 'restaurant not found' });
-  const menu = (await store.listMenu(t.id)).filter(m => m.active !== false);
+  const menu = (await store.listMenu(t.id)).filter(m => m.active !== false && availableNow(m));
   res.json(menu);
 }));
 
@@ -349,7 +372,7 @@ app.put('/api/tenant', requireAuth, requireRole('manager'), h(async (req, res) =
 }));
 
 app.post('/api/menu', requireAuth, requireRole('manager'), h(async (req, res) => {
-  const { category, name, price, emoji, image, sortOrder, modifierGroups, recipe, sku, barcode, stock, trackStock } = req.body;
+  const { category, name, price, emoji, image, sortOrder, modifierGroups, recipe, sku, barcode, stock, trackStock, taxRate, schedule, isCombo, comboItems } = req.body;
   if (!name || price == null) return res.status(400).json({ error: 'name and price required' });
   const existing = await store.listMenu(tid(req));
   const item = {
@@ -360,6 +383,9 @@ app.post('/api/menu', requireAuth, requireRole('manager'), h(async (req, res) =>
     recipe: Array.isArray(recipe) ? recipe : [],
     sku: sku ? String(sku) : null, barcode: barcode ? String(barcode) : null,
     stock: stock != null && stock !== '' ? Number(stock) : null, trackStock: !!trackStock,
+    taxRate: taxRate != null && taxRate !== '' ? Number(taxRate) : null,
+    schedule: schedule && typeof schedule === 'object' ? schedule : null,
+    isCombo: !!isCombo, comboItems: Array.isArray(comboItems) ? comboItems : [],
     tenantId: tid(req), active: true,
   };
   await store.createMenuItem(item);
@@ -431,13 +457,13 @@ app.post('/api/payments/intent', requireAuth, requireRole('manager', 'server'), 
 // Step 2: record the completed payment + close the order/table
 app.post('/api/payments/complete', requireAuth, requireRole('manager', 'server'), h(async (req, res) => {
   const { intentId, method = 'card', lines = [], tip = 0, orderId = null, table = null, customerId = null, pointsRedeemed = 0,
-    discount = 0, discountReason = null, serviceCharge = 0, comp = false } = req.body;
+    discount = 0, discountReason = null, serviceCharge = 0, comp = false, taxExempt = false } = req.body;
   // Comps (zeroing or near-zeroing a check) require a manager.
   const sub0 = priceLines(lines).subtotal;
   if ((comp || (Number(discount) || 0) >= sub0 - 1e-9) && (Number(discount) || 0) > 0 && req.user.role !== 'manager')
     return res.status(403).json({ error: 'comps require a manager' });
   const status = await retrieveStatus(intentId);
-  const totals = settle(lines, { discount, serviceCharge, tip });
+  const totals = settle(lines, { discount, serviceCharge, tip, taxExempt });
   const total = totals.total;
 
   // ---- loyalty: award points + apply any redemption to the attached member ----
@@ -475,13 +501,13 @@ app.post('/api/payments/complete', requireAuth, requireRole('manager', 'server')
 // even split). The first tender carries the full lines + tax/discount breakdown
 // so item counts aren't double-counted; the rest carry only the tendered amount.
 app.post('/api/payments/split', requireAuth, requireRole('manager', 'server'), h(async (req, res) => {
-  const { lines = [], tip = 0, discount = 0, discountReason = null, serviceCharge = 0, comp = false,
+  const { lines = [], tip = 0, discount = 0, discountReason = null, serviceCharge = 0, comp = false, taxExempt = false,
     orderId = null, table = null, tenders = [], customerId = null, pointsRedeemed = 0 } = req.body;
   if (!Array.isArray(tenders) || tenders.length < 1) return res.status(400).json({ error: 'at least one tender required' });
   const sub0 = priceLines(lines).subtotal;
   if ((comp || (Number(discount) || 0) >= sub0 - 1e-9) && (Number(discount) || 0) > 0 && req.user.role !== 'manager')
     return res.status(403).json({ error: 'comps require a manager' });
-  const totals = settle(lines, { discount, serviceCharge, tip });
+  const totals = settle(lines, { discount, serviceCharge, tip, taxExempt });
   const paid = round(tenders.reduce((a, t) => a + (Number(t.amount) || 0), 0));
   if (Math.abs(paid - totals.total) > 0.01) return res.status(400).json({ error: `tenders total ${paid.toFixed(2)} must equal the check total ${totals.total.toFixed(2)}` });
 
