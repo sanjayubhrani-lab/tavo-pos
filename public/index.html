@@ -227,9 +227,9 @@ function availableNow(it, now){ now=now||new Date(); const s=it&&it.schedule;
   return true; }
 const MODIFIERS = ["No onions","Extra cheese (+$1.50)","Add bacon (+$2)","Gluten-free (+$2)","Spicy","Well done","On the side"];
 
-const NAV=[{id:"pos",ic:"🧾",label:"Order"},{id:"floor",ic:"🍽️",label:"Tables"},{id:"kds",ic:"👨‍🍳",label:"Kitchen"},
+const NAV=[{id:"pos",ic:"🧾",label:"Order"},{id:"floor",ic:"🍽️",label:"Tables"},{id:"reservations",ic:"📅",label:"Reservations"},{id:"kds",ic:"👨‍🍳",label:"Kitchen"},
   {id:"online",ic:"📲",label:"Online"},{id:"qr",ic:"🔳",label:"QR Order"},{id:"dash",ic:"📊",label:"Reports"},{id:"analytics",ic:"📈",label:"Analytics"},{id:"menu",ic:"📖",label:"Menu"},{id:"inventory",ic:"📦",label:"Inventory"},{id:"purchasing",ic:"🚚",label:"Purchasing"},{id:"stocktake",ic:"🔢",label:"Stocktake"},{id:"loyalty",ic:"💳",label:"Loyalty"},{id:"crm",ic:"👥",label:"Customers"},{id:"marketing",ic:"📣",label:"Marketing"},{id:"drawer",ic:"💵",label:"Cash Drawer"},{id:"clock",ic:"⏱️",label:"Time Clock"},{id:"ask",ic:"✨",label:"Ask Tavo"},{id:"team",ic:"🧑‍🤝‍🧑",label:"Team"},{id:"settings",ic:"⚙️",label:"Setup"}];
-const titles={pos:["Order","Build a check"],floor:["Tables","Floor plan"],kds:["Kitchen Display","Live tickets"],
+const titles={pos:["Order","Build a check"],floor:["Tables","Floor plan"],reservations:["Reservations","Bookings & waitlist"],kds:["Kitchen Display","Live tickets"],
   online:["Online Orders","DoorDash · Uber Eats · Grubhub"],qr:["QR Order & Pay","Scan-to-order codes"],dash:["Reports","Performance"],analytics:["Analytics","Breakdowns & trends"],menu:["Menu Management","Items & pricing"],inventory:["Inventory","Stock & recipe costing"],purchasing:["Purchasing","Vendors & purchase orders"],stocktake:["Stocktake","Cycle counts & adjustments"],loyalty:["Loyalty & Gift Cards","Members & rewards"],crm:["Customers","Profiles & history"],marketing:["Marketing","Email & SMS campaigns"],drawer:["Cash Drawer","Open, reconcile & close"],clock:["Time Clock","Clock in & out"],ask:["Ask Tavo","Your AI business assistant"],team:["Team","Staff"],settings:["Setup","Settings"]};
 const PLATFORM_META={doordash:{name:'DoorDash',color:'#ff3008',emoji:'🚗'},ubereats:{name:'Uber Eats',color:'#06c167',emoji:'🛵'},grubhub:{name:'Grubhub',color:'#f63440',emoji:'🍔'},other:{name:'Online',color:'#4d8df5',emoji:'📲'},qr:{name:'Table QR',color:'#a855f7',emoji:'📱'}};
 function chMeta(o){ return o.channel==='delivery'?(PLATFORM_META[o.platform]||PLATFORM_META.other):(o.channel==='qr'?PLATFORM_META.qr:null); }
@@ -249,7 +249,7 @@ function allowedNav(){
   let nav = NAV.filter(n=>r.includes(n.id));
   if(isRetail()){
     // Retail businesses don't need tables, kitchen, QR table-ordering, or delivery.
-    const hide=new Set(['floor','kds','qr','online']);
+    const hide=new Set(['floor','kds','qr','online','reservations']);
     nav = nav.filter(n=>!hide.has(n.id)).map(n=>{
       if(n.id==='pos') return {...n,ic:'🛒',label:'Sell'};
       if(n.id==='menu') return {...n,ic:'🏷️',label:'Products'};
@@ -272,6 +272,7 @@ async function render(){
   const v=$("#view");
   if(route==="pos")v.innerHTML=posView();
   else if(route==="floor")v.innerHTML=await floorView();
+  else if(route==="reservations")v.innerHTML=await reservationsView();
   else if(route==="kds")v.innerHTML=await kdsView();
   else if(route==="online")v.innerHTML=await onlineView();
   else if(route==="qr"){v.innerHTML=await qrView();paintQRs();}
@@ -1368,6 +1369,84 @@ async function issueGift(){
   try{ const card=await api('/giftcards',{method:'POST',body:JSON.stringify({amount,code:code||undefined})});
     closeModal(); render(); toast('🎁 Issued '+card.code+' · '+money(card.balance));
   }catch(e){ toast('⚠️ '+e.message); }
+}
+
+/* ---- RESERVATIONS + WAITLIST ---- */
+let _resvs=[], _resvTab='reservations';
+async function reservationsView(){
+  _resvs=await api('/reservations').catch(()=>[]);
+  const resvs=_resvs.filter(r=>r.kind==='reservation');
+  const waits=_resvs.filter(r=>r.kind==='waitlist');
+  const activeWait=waits.filter(w=>w.status==='waiting');
+  const upcoming=resvs.filter(r=>r.status==='booked');
+  const tab=(id,label,n)=>`<button class="chip ${_resvTab===id?'sel':''}" style="padding:8px 16px" onclick="_resvTab='${id}';render()">${label}${n?` <b>${n}</b>`:''}</button>`;
+  const statusTag={booked:'<span class="tag" style="background:#1e3a5f;color:#7fb3ff">Booked</span>',waiting:'<span class="tag" style="background:#3b3320;color:#f5c451">Waiting</span>',seated:'<span class="tag green">Seated</span>',cancelled:'<span class="tag red">Cancelled</span>',noshow:'<span class="tag red">No-show</span>',done:'<span class="tag">Done</span>'};
+  let body;
+  if(_resvTab==='reservations'){
+    const rows=resvs.map(r=>`<tr style="${['cancelled','noshow','done'].includes(r.status)?'opacity:.5':''}">
+        <td style="white-space:nowrap"><b>${new Date(r.time).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</b><div style="font-size:11px;color:var(--mut)">${new Date(r.time).toLocaleDateString()}</div></td>
+        <td><b>${esc(r.name)}</b>${r.notes?`<div style="font-size:11px;color:var(--mut)">${esc(r.notes)}</div>`:''}</td>
+        <td style="text-align:center">👥 ${r.partySize}</td>
+        <td style="color:var(--mut)">${esc(r.phone||'')}</td>
+        <td>${statusTag[r.status]||r.status}${r.tableNumber?` · T${r.tableNumber}`:''}</td>
+        <td style="text-align:right;white-space:nowrap">${r.status==='booked'?`<button class="btn green" style="flex:0;padding:6px 10px" onclick="seatResv('${r.id}')">Seat</button>
+          <button class="chip" onclick="resvStatus('${r.id}','noshow')">No-show</button>
+          <button class="chip" onclick="resvStatus('${r.id}','cancelled')">✕</button>`:''}</td></tr>`).join('')
+      ||'<tr><td colspan="6" style="text-align:center;color:var(--mut);padding:20px">No reservations. Add one above.</td></tr>';
+    body=`<div class="card"><table><thead><tr><th>Time</th><th>Guest</th><th>Party</th><th>Phone</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  } else {
+    const rows=waits.map(w=>{const elapsed=Math.floor((Date.now()-w.createdAt)/60000);
+      return `<tr style="${['cancelled','noshow','done','seated'].includes(w.status)?'opacity:.5':''}">
+        <td><b>${esc(w.name)}</b>${w.notes?`<div style="font-size:11px;color:var(--mut)">${esc(w.notes)}</div>`:''}</td>
+        <td style="text-align:center">👥 ${w.partySize}</td>
+        <td style="text-align:center">${w.quotedWait!=null?w.quotedWait+'m quoted':''}</td>
+        <td style="text-align:center;color:${elapsed>(w.quotedWait||999)?'#f87171':'var(--mut)'}">waiting ${elapsed}m</td>
+        <td>${statusTag[w.status]||w.status}${w.tableNumber?` · T${w.tableNumber}`:''}</td>
+        <td style="text-align:right;white-space:nowrap">${w.status==='waiting'?`<button class="btn green" style="flex:0;padding:6px 10px" onclick="seatResv('${w.id}')">Seat</button>
+          <button class="chip" onclick="resvStatus('${w.id}','cancelled')">✕</button>`:''}</td></tr>`;}).join('')
+      ||'<tr><td colspan="6" style="text-align:center;color:var(--mut);padding:20px">Waitlist is empty.</td></tr>';
+    body=`<div class="card"><table><thead><tr><th>Guest</th><th>Party</th><th>Quote</th><th>Waiting</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }
+  return `<div style="display:flex;gap:10px;margin-bottom:16px">
+      <div class="card" style="flex:1;text-align:center"><div style="font-size:24px;font-weight:800">${upcoming.length}</div><div style="color:var(--mut);font-size:12px">Upcoming bookings</div></div>
+      <div class="card" style="flex:1;text-align:center"><div style="font-size:24px;font-weight:800;color:#f5c451">${activeWait.length}</div><div style="color:var(--mut);font-size:12px">On waitlist</div></div>
+      <div class="card" style="flex:1;text-align:center"><div style="font-size:24px;font-weight:800;color:#34d399">${_resvs.filter(r=>r.status==='seated').length}</div><div style="color:var(--mut);font-size:12px">Seated today</div></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+      <div style="display:flex;gap:6px">${tab('reservations','📅 Reservations',upcoming.length)}${tab('waitlist','⏳ Waitlist',activeWait.length)}</div>
+      <button class="btn primary" style="flex:0;padding:10px 18px" onclick="resvForm('${_resvTab==='waitlist'?'waitlist':'reservation'}')">+ ${_resvTab==='waitlist'?'Add to waitlist':'New reservation'}</button></div>
+    ${body}`;
+}
+function resvForm(kind){
+  const ip='width:100%;padding:9px;border-radius:8px;background:var(--panel);border:1px solid var(--line);color:var(--txt)';
+  const isW=kind==='waitlist';
+  const now=new Date(Date.now()+3600000); const dt=now.toISOString().slice(0,16);
+  openModal(`<div class="mhd"><h3>${isW?'⏳ Add to Waitlist':'📅 New Reservation'}</h3><button class="x" onclick="closeModal()">✕</button></div><div class="mbd">
+    <div class="fld"><label>Guest name</label><input id="rf-name" style="${ip}" autofocus></div>
+    <div class="row2"><div class="fld" style="margin:0"><label>Party size</label><input id="rf-party" type="number" min="1" value="2" style="${ip}"></div>
+      <div class="fld" style="margin:0"><label>Phone</label><input id="rf-phone" style="${ip}"></div></div>
+    ${isW?`<div class="fld"><label>Quoted wait (minutes)</label><input id="rf-wait" type="number" min="0" value="20" style="${ip}"></div>`
+        :`<div class="fld"><label>Date &amp; time</label><input id="rf-time" type="datetime-local" value="${dt}" style="${ip}"></div>`}
+    <div class="fld"><label>Notes</label><input id="rf-notes" placeholder="seating preference, occasion…" style="${ip}"></div>
+    <button class="btn green" style="margin-top:6px" onclick="saveResv('${kind}')">${isW?'Add to waitlist':'Book reservation'}</button></div>`);
+}
+async function saveResv(kind){
+  const body={kind,name:$("#rf-name").value.trim(),partySize:$("#rf-party").value,phone:$("#rf-phone").value.trim(),notes:$("#rf-notes").value.trim()};
+  if(!body.name){ toast('Guest name required'); return; }
+  if(kind==='waitlist') body.quotedWait=$("#rf-wait").value;
+  else { const t=$("#rf-time").value; if(!t){ toast('Pick a time'); return; } body.time=new Date(t).getTime(); }
+  try{ await api('/reservations',{method:'POST',body:JSON.stringify(body)}); closeModal(); render(); toast(kind==='waitlist'?'⏳ Added to waitlist':'📅 Reservation booked'); }
+  catch(e){ toast('⚠️ '+e.message); }
+}
+async function seatResv(id){
+  const t=prompt('Seat at table number (optional):','');
+  if(t===null) return;
+  try{ await api('/reservations/'+id+'/seat',{method:'POST',body:JSON.stringify({tableNumber:t?Number(t):null})}); render(); toast('✓ Party seated'); }
+  catch(e){ toast('⚠️ '+e.message); }
+}
+async function resvStatus(id,status){
+  try{ await api('/reservations/'+id+'/status',{method:'POST',body:JSON.stringify({status})}); render(); toast('Updated'); }
+  catch(e){ toast('⚠️ '+e.message); }
 }
 
 /* ---- ANALYTICS (advanced reporting) ---- */
