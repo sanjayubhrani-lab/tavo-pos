@@ -14,6 +14,7 @@ const num = v => (v == null ? v : Number(v));
 const mMenu = r => ({ id: r.id, category: r.category, name: r.name, price: num(r.price), emoji: r.emoji,
   image: r.image ?? null, sortOrder: num(r.sort_order) || 0, modifierGroups: r.modifier_groups ?? [], recipe: r.recipe ?? [],
   sku: r.sku ?? null, barcode: r.barcode ?? null, stock: r.stock == null ? null : num(r.stock), trackStock: r.track_stock ?? false,
+  taxRate: r.tax_rate == null ? null : num(r.tax_rate), schedule: r.schedule ?? null, isCombo: r.is_combo ?? false, comboItems: r.combo_items ?? [],
   active: r.active, tenantId: r.tenant_id ?? DEFAULT_TENANT });
 const mInv = r => ({ id: r.id, name: r.name, unit: r.unit ?? 'unit', qty: num(r.qty) || 0, parLevel: num(r.par_level) || 0, cost: num(r.cost) || 0, tenantId: r.tenant_id ?? DEFAULT_TENANT });
 const mCust = r => ({ id: r.id, name: r.name, phone: r.phone, points: num(r.points) || 0, visits: num(r.visits) || 0, totalSpent: num(r.total_spent) || 0, tenantId: r.tenant_id ?? DEFAULT_TENANT, createdAt: num(r.created_at) });
@@ -41,8 +42,8 @@ const mTenant = r => ({ id: r.id, name: r.name, slug: r.slug, plan: r.plan, mode
 // Insert one tenant's rows (stamped with tenant_id) without wiping others.
 async function insertSeed(q, { menu = [], tables = [], staff = [], users = [], inventory = [] }) {
   for (const m of menu)
-    await q('INSERT INTO menu(id,category,name,price,emoji,image,sort_order,modifier_groups,recipe,sku,barcode,stock,track_stock,active,tenant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)',
-      [m.id, m.category, m.name, m.price, m.emoji, m.image ?? null, m.sortOrder ?? 0, JSON.stringify(m.modifierGroups ?? []), JSON.stringify(m.recipe ?? []), m.sku ?? null, m.barcode ?? null, m.stock ?? null, m.trackStock ?? false, m.active, T(m.tenantId)]);
+    await q('INSERT INTO menu(id,category,name,price,emoji,image,sort_order,modifier_groups,recipe,sku,barcode,stock,track_stock,tax_rate,schedule,is_combo,combo_items,active,tenant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)',
+      [m.id, m.category, m.name, m.price, m.emoji, m.image ?? null, m.sortOrder ?? 0, JSON.stringify(m.modifierGroups ?? []), JSON.stringify(m.recipe ?? []), m.sku ?? null, m.barcode ?? null, m.stock ?? null, m.trackStock ?? false, m.taxRate ?? null, m.schedule ? JSON.stringify(m.schedule) : null, m.isCombo ?? false, JSON.stringify(m.comboItems ?? []), m.active, T(m.tenantId)]);
   for (const t of tables)
     await q('INSERT INTO tables(number,status,order_id,tenant_id) VALUES($1,$2,$3,$4)', [t.number, t.status, t.orderId, T(t.tenantId)]);
   for (const s of staff)
@@ -123,6 +124,11 @@ export async function makePgStore(poolOverride) {
         'ALTER TABLE menu ADD COLUMN barcode TEXT',
         'ALTER TABLE menu ADD COLUMN stock NUMERIC(12,3)',
         'ALTER TABLE menu ADD COLUMN track_stock BOOLEAN DEFAULT FALSE',
+        // menu sophistication: per-item tax, dayparting schedule, combos
+        'ALTER TABLE menu ADD COLUMN tax_rate NUMERIC(6,4)',
+        'ALTER TABLE menu ADD COLUMN schedule JSONB',
+        'ALTER TABLE menu ADD COLUMN is_combo BOOLEAN DEFAULT FALSE',
+        "ALTER TABLE menu ADD COLUMN combo_items JSONB DEFAULT '[]'",
       ];
       for (const u of upgrades) { try { await q(u); } catch { /* column already present */ } }
     },
@@ -155,15 +161,15 @@ export async function makePgStore(poolOverride) {
     // menu (tenant-scoped)
     async listMenu(tenantId) { return (await q('SELECT * FROM menu WHERE tenant_id=$1 ORDER BY sort_order, category, name', [T(tenantId)])).rows.map(mMenu); },
     async createMenuItem(i) {
-      await q('INSERT INTO menu(id,category,name,price,emoji,image,sort_order,modifier_groups,recipe,sku,barcode,stock,track_stock,active,tenant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)',
-        [i.id, i.category, i.name, i.price, i.emoji, i.image ?? null, i.sortOrder ?? 0, JSON.stringify(i.modifierGroups ?? []), JSON.stringify(i.recipe ?? []), i.sku ?? null, i.barcode ?? null, i.stock ?? null, i.trackStock ?? false, i.active, T(i.tenantId)]);
+      await q('INSERT INTO menu(id,category,name,price,emoji,image,sort_order,modifier_groups,recipe,sku,barcode,stock,track_stock,tax_rate,schedule,is_combo,combo_items,active,tenant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)',
+        [i.id, i.category, i.name, i.price, i.emoji, i.image ?? null, i.sortOrder ?? 0, JSON.stringify(i.modifierGroups ?? []), JSON.stringify(i.recipe ?? []), i.sku ?? null, i.barcode ?? null, i.stock ?? null, i.trackStock ?? false, i.taxRate ?? null, i.schedule ? JSON.stringify(i.schedule) : null, i.isCombo ?? false, JSON.stringify(i.comboItems ?? []), i.active, T(i.tenantId)]);
       return i;
     },
     async updateMenuItem(id, patch) {
       const cur = (await q('SELECT * FROM menu WHERE id=$1', [id])).rows[0];
       if (!cur) return null; const n = { ...mMenu(cur), ...patch };
-      await q('UPDATE menu SET category=$2,name=$3,price=$4,emoji=$5,image=$6,sort_order=$7,modifier_groups=$8,recipe=$9,sku=$10,barcode=$11,stock=$12,track_stock=$13,active=$14 WHERE id=$1',
-        [id, n.category, n.name, n.price, n.emoji, n.image ?? null, n.sortOrder ?? 0, JSON.stringify(n.modifierGroups ?? []), JSON.stringify(n.recipe ?? []), n.sku ?? null, n.barcode ?? null, n.stock ?? null, n.trackStock ?? false, n.active]);
+      await q('UPDATE menu SET category=$2,name=$3,price=$4,emoji=$5,image=$6,sort_order=$7,modifier_groups=$8,recipe=$9,sku=$10,barcode=$11,stock=$12,track_stock=$13,tax_rate=$14,schedule=$15,is_combo=$16,combo_items=$17,active=$18 WHERE id=$1',
+        [id, n.category, n.name, n.price, n.emoji, n.image ?? null, n.sortOrder ?? 0, JSON.stringify(n.modifierGroups ?? []), JSON.stringify(n.recipe ?? []), n.sku ?? null, n.barcode ?? null, n.stock ?? null, n.trackStock ?? false, n.taxRate ?? null, n.schedule ? JSON.stringify(n.schedule) : null, n.isCombo ?? false, JSON.stringify(n.comboItems ?? []), n.active]);
       return n;
     },
     async deleteMenuItem(id) { await q('DELETE FROM menu WHERE id=$1', [id]); },
