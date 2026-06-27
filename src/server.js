@@ -490,6 +490,7 @@ app.post('/api/payments/complete', requireAuth, requireRole('manager', 'server')
     refundedAmount: 0, refundedAt: null,
     discountReason: totals.discount > 0 ? (discountReason || (comp ? 'Comp' : 'Discount')) : null,
     customerId: member ? member.id : null, pointsEarned, pointsRedeemed: member ? Math.round(Number(pointsRedeemed) || 0) : 0,
+    userId: req.user && req.user.id || null, userName: req.user && req.user.name || null,
     tenantId: tid(req), createdAt: Date.now(),
   };
   await store.createPayment(payment);
@@ -538,6 +539,7 @@ app.post('/api/payments/split', requireAuth, requireRole('manager', 'server'), h
       refundedAmount: 0, refundedAt: null,
       discountReason: first && totals.discount > 0 ? (discountReason || (comp ? 'Comp' : 'Discount')) : null,
       customerId: first && member ? member.id : null, pointsEarned: first ? pointsEarned : 0, pointsRedeemed: first && member ? Math.round(Number(pointsRedeemed) || 0) : 0,
+      userId: req.user && req.user.id || null, userName: req.user && req.user.name || null,
       split: true, splitCount: tenders.length, tenantId: tid(req), createdAt: Date.now(),
     };
     await store.createPayment(payment);
@@ -627,6 +629,98 @@ app.get('/api/reports/summary', requireAuth, requireRole('manager'), h(async (re
   res.json({ gross, refunds, net, tips, tax, discounts, serviceCharges, comps, orders, avgCheck, byMethod, topSellers, openChecks,
     foodCost, foodCostPct, grossProfit, lowStock, stockValue, inventoryCount: inventory.length,
     laborCost, laborHours, laborPct, clockedIn });
+}));
+
+// ============================================================================
+//  Advanced analytics — breakdowns, heatmaps, period comparison, report builder
+// ============================================================================
+const DAYPARTS = [
+  { key: 'Morning', from: 5, to: 11 }, { key: 'Lunch', from: 11, to: 14 },
+  { key: 'Afternoon', from: 14, to: 17 }, { key: 'Dinner', from: 17, to: 22 },
+  { key: 'Late night', from: 22, to: 29 },   // 22:00–05:00 (wraps)
+];
+const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+function daypartOf(hr) { for (const d of DAYPARTS) { const h = hr < 5 ? hr + 24 : hr; if (h >= d.from && h < d.to) return d.key; } return 'Late night'; }
+const payNet = p => round((p.total || 0) - (p.refundedAmount || 0));
+function defaultRange(q) {
+  const to = q.to ? Number(q.to) : Date.now();
+  const from = q.from ? Number(q.from) : to - 30 * 86400000;
+  return { from, to };
+}
+
+// One call: every standard breakdown over a date range, plus a previous-period comparison.
+app.get('/api/reports/analytics', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const { from, to } = defaultRange(req.query);
+  const all = (await store.listPayments(tid(req))).filter(p => p.status !== 'voided');
+  const inRange = all.filter(p => (p.createdAt || 0) >= from && (p.createdAt || 0) < to);
+  const menu = await store.listMenu(tid(req));
+  const catOf = new Map(); menu.forEach(m => catOf.set(m.name, m.category || 'Other'));
+
+  const sum = arr => round(arr.reduce((a, p) => a + payNet(p), 0));
+  const bucket = (keyFn) => {
+    const m = {};
+    for (const p of inRange) { const k = keyFn(p); if (k == null) continue; (m[k] ||= { key: k, sales: 0, orders: 0, tips: 0 }); m[k].sales = round(m[k].sales + payNet(p)); m[k].orders++; m[k].tips = round(m[k].tips + (p.tip || 0)); }
+    return Object.values(m).sort((a, b) => b.sales - a.sales);
+  };
+  const byEmployee = bucket(p => p.userName || 'Unassigned');
+  const byMethod = bucket(p => p.method || 'other');
+  const byDaypart = bucket(p => daypartOf(new Date(p.createdAt).getHours()));
+  const byDow = DOW.map((d, i) => { const ps = inRange.filter(p => new Date(p.createdAt).getDay() === i); return { key: d, sales: sum(ps), orders: ps.length }; });
+  const byHour = Array.from({ length: 24 }, (_, hr) => { const ps = inRange.filter(p => new Date(p.createdAt).getHours() === hr); return { hour: hr, sales: sum(ps), orders: ps.length }; });
+
+  // category needs per-line attribution
+  const catMap = {};
+  for (const p of inRange) for (const l of (p.lines || [])) {
+    const c = catOf.get(l.name) || 'Other'; const amt = round((l.price || 0) * (l.qty || 0));
+    (catMap[c] ||= { key: c, sales: 0, units: 0 }); catMap[c].sales = round(catMap[c].sales + amt); catMap[c].units = round(catMap[c].units + (l.qty || 0));
+  }
+  const byCategory = Object.values(catMap).sort((a, b) => b.sales - a.sales);
+
+  // discounts + taxes
+  const discountRows = {};
+  inRange.filter(p => (p.discount || 0) > 0).forEach(p => { const r = p.discountReason || 'Discount'; (discountRows[r] ||= { key: r, amount: 0, count: 0 }); discountRows[r].amount = round(discountRows[r].amount + p.discount); discountRows[r].count++; });
+  const discounts = { total: round(inRange.reduce((a, p) => a + (p.discount || 0), 0)), byReason: Object.values(discountRows).sort((a, b) => b.amount - a.amount) };
+  const taxTotal = round(inRange.reduce((a, p) => a + (p.tax || 0), 0));
+  const exemptCount = inRange.filter(p => (p.subtotal || 0) > 0 && (p.tax || 0) === 0).length;
+
+  // previous equal-length period for comparison
+  const span = to - from;
+  const prev = all.filter(p => (p.createdAt || 0) >= (from - span) && (p.createdAt || 0) < from);
+  const pct = (cur, was) => was > 0 ? round(((cur - was) / was) * 100) : (cur > 0 ? 100 : 0);
+  const netNow = sum(inRange), netPrev = sum(prev);
+  const compare = { netSales: netNow, prevNetSales: netPrev, salesChangePct: pct(netNow, netPrev), orders: inRange.length, prevOrders: prev.length, ordersChangePct: pct(inRange.length, prev.length) };
+
+  res.json({ range: { from, to }, totals: { netSales: netNow, orders: inRange.length, avgCheck: inRange.length ? round(netNow / inRange.length) : 0, tax: taxTotal, taxExemptOrders: exemptCount },
+    byEmployee, byCategory, byDaypart, byDow, byHour, byMethod, discounts, compare });
+}));
+
+// Flexible report builder: choose a dimension to group by and a metric to measure.
+app.get('/api/reports/build', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const { from, to } = defaultRange(req.query);
+  const groupBy = String(req.query.groupBy || 'employee');
+  const metric = String(req.query.metric || 'sales');
+  const pays = (await store.listPayments(tid(req))).filter(p => p.status !== 'voided' && (p.createdAt || 0) >= from && (p.createdAt || 0) < to);
+  const menu = await store.listMenu(tid(req));
+  const catOf = new Map(); menu.forEach(m => catOf.set(m.name, m.category || 'Other'));
+  const keyFns = {
+    employee: p => p.userName || 'Unassigned', method: p => p.method || 'other',
+    daypart: p => daypartOf(new Date(p.createdAt).getHours()),
+    hour: p => String(new Date(p.createdAt).getHours()).padStart(2, '0') + ':00',
+    dow: p => DOW[new Date(p.createdAt).getDay()],
+    day: p => new Date(p.createdAt).toISOString().slice(0, 10),
+  };
+  if (groupBy === 'category') {
+    const m = {};
+    for (const p of pays) for (const l of (p.lines || [])) { const c = catOf.get(l.name) || 'Other'; (m[c] ||= { sales: 0, orders: 0, units: 0 }); m[c].sales = round(m[c].sales + (l.price || 0) * (l.qty || 0)); m[c].units += (l.qty || 0); }
+    const rows = Object.entries(m).map(([key, v]) => ({ key, value: metric === 'units' ? v.units : v.sales })).sort((a, b) => b.value - a.value);
+    return res.json({ groupBy, metric: metric === 'units' ? 'units' : 'sales', range: { from, to }, rows });
+  }
+  const kf = keyFns[groupBy] || keyFns.employee;
+  const m = {};
+  for (const p of pays) { const k = kf(p); (m[k] ||= { sales: 0, orders: 0, tips: 0 }); m[k].sales = round(m[k].sales + payNet(p)); m[k].orders++; m[k].tips = round(m[k].tips + (p.tip || 0)); }
+  const valueOf = v => metric === 'orders' ? v.orders : metric === 'avg' ? (v.orders ? round(v.sales / v.orders) : 0) : metric === 'tips' ? v.tips : v.sales;
+  const rows = Object.entries(m).map(([key, v]) => ({ key, value: valueOf(v) })).sort((a, b) => b.value - a.value);
+  res.json({ groupBy, metric, range: { from, to }, rows });
 }));
 
 // ---- delivery-platform integrations (DoorDash / Uber Eats / Grubhub / aggregators) ----

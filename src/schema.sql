@@ -75,6 +75,8 @@ CREATE TABLE IF NOT EXISTS payments (
   customer_id TEXT,
   points_earned INTEGER DEFAULT 0,
   points_redeemed INTEGER DEFAULT 0,
+  user_id    TEXT,
+  user_name  TEXT,
   refunded_amount NUMERIC(10,2) DEFAULT 0,
   refunded_at BIGINT,
   tenant_id  TEXT DEFAULT 'default',
