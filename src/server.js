@@ -1139,6 +1139,61 @@ app.get('/api/display', h(async (req, res) => {
   res.json({ business: t.name, ...s });
 }));
 
+// ============================================================================
+//  Multi-location — a registry of sites + a consolidated cross-site roll-up
+// ============================================================================
+app.get('/api/locations', requireAuth, requireRole('manager'), h(async (req, res) => res.json(await store.listLocations(tid(req)))));
+app.post('/api/locations', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const { name, address, slug } = req.body;
+  if (!name) return res.status(400).json({ error: 'location name required' });
+  if (!slug) return res.status(400).json({ error: 'business slug required' });
+  const t = await resolveTenant(slug);
+  if (!t) return res.status(404).json({ error: 'no business with that slug — create it via signup first' });
+  const l = { id: nanoid(8), name: String(name).slice(0, 80), address: address ? String(address).slice(0, 160) : '', slug: t.slug, tenantId: tid(req), createdAt: Date.now() };
+  await store.createLocation(l);
+  res.status(201).json(l);
+}));
+app.put('/api/locations/:id', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const cur = await store.getLocation(req.params.id);
+  if (!cur || (cur.tenantId || DEFAULT_TENANT) !== tid(req)) return res.status(404).json({ error: 'not found' });
+  const patch = {};
+  for (const k of ['name', 'address']) if (req.body[k] != null) patch[k] = String(req.body[k]);
+  if (req.body.slug) { const t = await resolveTenant(req.body.slug); if (!t) return res.status(404).json({ error: 'unknown slug' }); patch.slug = t.slug; }
+  res.json(await store.updateLocation(req.params.id, patch));
+}));
+app.delete('/api/locations/:id', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const cur = await store.getLocation(req.params.id);
+  if (!cur || (cur.tenantId || DEFAULT_TENANT) !== tid(req)) return res.status(404).json({ error: 'not found' });
+  await store.deleteLocation(req.params.id);
+  res.status(204).end();
+}));
+
+// Consolidated roll-up: net sales / orders / tax per registered site + combined totals.
+app.get('/api/locations/rollup', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const { from, to } = defaultRange(req.query);
+  const locs = await store.listLocations(tid(req));
+  const rows = [];
+  for (const l of locs) {
+    const t = await resolveTenant(l.slug);
+    let net = 0, orders = 0, tax = 0;
+    if (t) {
+      const pays = (await store.listPayments(t.id)).filter(p => p.status !== 'voided' && (p.createdAt || 0) >= from && (p.createdAt || 0) < to);
+      net = round(pays.reduce((a, p) => a + ((p.total || 0) - (p.refundedAmount || 0)), 0));
+      tax = round(pays.reduce((a, p) => a + (p.tax || 0), 0));
+      orders = pays.length;
+    }
+    rows.push({ id: l.id, name: l.name, address: l.address, slug: l.slug, netSales: net, orders, tax, avgCheck: orders ? round(net / orders) : 0 });
+  }
+  rows.sort((a, b) => b.netSales - a.netSales);
+  const combined = {
+    netSales: round(rows.reduce((a, r) => a + r.netSales, 0)),
+    orders: rows.reduce((a, r) => a + r.orders, 0),
+    tax: round(rows.reduce((a, r) => a + r.tax, 0)),
+  };
+  combined.avgCheck = combined.orders ? round(combined.netSales / combined.orders) : 0;
+  res.json({ range: { from, to }, locations: rows, combined });
+}));
+
 // ---- loyalty config ----
 app.get('/api/loyalty/config', requireAuth, (req, res) =>
   res.json({ earnRate: LOYALTY_EARN, redeemRate: LOYALTY_REDEEM }));

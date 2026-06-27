@@ -27,7 +27,8 @@ const DEFAULTS = {
   stocktakes: [],  // {id, name, status, counts, tenantId, createdAt, closedAt}  — cycle counts
   reservations: [], // {id, kind, name, phone, partySize, time, quotedWait, status, tableNumber, notes, tenantId, createdAt, seatedAt}
   houseAccounts: [], // {id, name, contact, email, phone, creditLimit, balance, tenantId, createdAt}
-  invoices: []     // {id, accountId, accountName, lines, total, status, dueDate, notes, tenantId, createdAt, paidAt}
+  invoices: [],    // {id, accountId, accountName, lines, total, status, dueDate, notes, tenantId, createdAt, paidAt}
+  locations: []    // {id, name, address, slug, tenantId, createdAt}  — multi-site registry
 };
 
 function ensureFile() {

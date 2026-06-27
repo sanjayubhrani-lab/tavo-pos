@@ -8,7 +8,7 @@ const TOKEN_TTL = '12h';
 
 // What each role is allowed to do (used by both API guards and the UI).
 export const ROLE_ROUTES = {
-  manager: ['pos', 'floor', 'kds', 'online', 'qr', 'dash', 'analytics', 'menu', 'inventory', 'purchasing', 'stocktake', 'loyalty', 'crm', 'marketing', 'reservations', 'houseaccounts', 'ask', 'drawer', 'clock', 'team', 'settings'],
+  manager: ['pos', 'floor', 'kds', 'online', 'qr', 'dash', 'analytics', 'menu', 'inventory', 'purchasing', 'stocktake', 'loyalty', 'crm', 'marketing', 'reservations', 'houseaccounts', 'locations', 'ask', 'drawer', 'clock', 'team', 'settings'],
   server:  ['pos', 'floor', 'kds', 'online', 'reservations', 'clock'],
   kitchen: ['kds', 'online', 'clock'],
 };
