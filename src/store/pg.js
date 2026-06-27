@@ -15,7 +15,11 @@ const mMenu = r => ({ id: r.id, category: r.category, name: r.name, price: num(r
   image: r.image ?? null, sortOrder: num(r.sort_order) || 0, modifierGroups: r.modifier_groups ?? [], recipe: r.recipe ?? [],
   sku: r.sku ?? null, barcode: r.barcode ?? null, stock: r.stock == null ? null : num(r.stock), trackStock: r.track_stock ?? false,
   taxRate: r.tax_rate == null ? null : num(r.tax_rate), schedule: r.schedule ?? null, isCombo: r.is_combo ?? false, comboItems: r.combo_items ?? [],
+  weighted: r.weighted ?? false, weightUnit: r.weight_unit ?? 'lb',
   active: r.active, tenantId: r.tenant_id ?? DEFAULT_TENANT });
+const mVendor = r => ({ id: r.id, name: r.name, contact: r.contact ?? '', email: r.email ?? '', phone: r.phone ?? '', notes: r.notes ?? '', tenantId: r.tenant_id ?? DEFAULT_TENANT, createdAt: num(r.created_at) });
+const mPO = r => ({ id: r.id, vendorId: r.vendor_id ?? null, vendorName: r.vendor_name ?? '', status: r.status, lines: r.lines ?? [], total: num(r.total) || 0, notes: r.notes ?? '', receivedAt: r.received_at == null ? null : num(r.received_at), tenantId: r.tenant_id ?? DEFAULT_TENANT, createdAt: num(r.created_at) });
+const mStocktake = r => ({ id: r.id, name: r.name, status: r.status, counts: r.counts ?? [], tenantId: r.tenant_id ?? DEFAULT_TENANT, createdAt: num(r.created_at), closedAt: r.closed_at == null ? null : num(r.closed_at) });
 const mInv = r => ({ id: r.id, name: r.name, unit: r.unit ?? 'unit', qty: num(r.qty) || 0, parLevel: num(r.par_level) || 0, cost: num(r.cost) || 0, tenantId: r.tenant_id ?? DEFAULT_TENANT });
 const mCust = r => ({ id: r.id, name: r.name, phone: r.phone, email: r.email ?? null, notes: r.notes ?? '', marketingOptIn: r.marketing_opt_in !== false, points: num(r.points) || 0, visits: num(r.visits) || 0, totalSpent: num(r.total_spent) || 0, tenantId: r.tenant_id ?? DEFAULT_TENANT, createdAt: num(r.created_at) });
 const mMsg = r => ({ id: r.id, channel: r.channel, kind: r.kind, to: r.to_addr, customerId: r.customer_id ?? null, campaignId: r.campaign_id ?? null, subject: r.subject ?? '', body: r.body ?? '', status: r.status, error: r.error ?? null, tenantId: r.tenant_id ?? DEFAULT_TENANT, createdAt: num(r.created_at) });
@@ -154,6 +158,20 @@ export async function makePgStore(poolOverride) {
            id TEXT PRIMARY KEY, name TEXT, channel TEXT, segment TEXT, subject TEXT, body TEXT,
            recipients INTEGER DEFAULT 0, sent INTEGER DEFAULT 0, failed INTEGER DEFAULT 0,
            tenant_id TEXT DEFAULT 'default', created_at BIGINT)`,
+        // retail depth: weighted items
+        'ALTER TABLE menu ADD COLUMN weighted BOOLEAN DEFAULT FALSE',
+        "ALTER TABLE menu ADD COLUMN weight_unit TEXT DEFAULT 'lb'",
+        // purchasing + stock control
+        `CREATE TABLE IF NOT EXISTS vendors (
+           id TEXT PRIMARY KEY, name TEXT, contact TEXT, email TEXT, phone TEXT, notes TEXT,
+           tenant_id TEXT DEFAULT 'default', created_at BIGINT)`,
+        `CREATE TABLE IF NOT EXISTS purchase_orders (
+           id TEXT PRIMARY KEY, vendor_id TEXT, vendor_name TEXT, status TEXT DEFAULT 'draft',
+           lines JSONB DEFAULT '[]', total NUMERIC(12,2) DEFAULT 0, notes TEXT, received_at BIGINT,
+           tenant_id TEXT DEFAULT 'default', created_at BIGINT)`,
+        `CREATE TABLE IF NOT EXISTS stocktakes (
+           id TEXT PRIMARY KEY, name TEXT, status TEXT DEFAULT 'open', counts JSONB DEFAULT '[]',
+           tenant_id TEXT DEFAULT 'default', created_at BIGINT, closed_at BIGINT)`,
       ];
       for (const u of upgrades) { try { await q(u); } catch { /* column already present */ } }
     },
@@ -175,7 +193,7 @@ export async function makePgStore(poolOverride) {
     async seedTenant(data) { await insertSeed(q, data); },
 
     async reset({ menu = [], tables = [], staff = [], users = [], inventory = [], tenants } = {}) {
-      for (const t of ['menu', 'tables', 'orders', 'payments', 'users', 'staff', 'inventory', 'customers', 'giftcards', 'drawers', 'shifts', 'messages', 'campaigns', 'tenants'])
+      for (const t of ['menu', 'tables', 'orders', 'payments', 'users', 'staff', 'inventory', 'customers', 'giftcards', 'drawers', 'shifts', 'messages', 'campaigns', 'vendors', 'purchase_orders', 'stocktakes', 'tenants'])
         await q(`DELETE FROM ${t}`);
       const tlist = tenants || [{ id: DEFAULT_TENANT, name: 'Default', slug: DEFAULT_TENANT, plan: 'free', mode: 'restaurant', createdAt: Date.now() }];
       for (const t of tlist)
@@ -186,15 +204,15 @@ export async function makePgStore(poolOverride) {
     // menu (tenant-scoped)
     async listMenu(tenantId) { return (await q('SELECT * FROM menu WHERE tenant_id=$1 ORDER BY sort_order, category, name', [T(tenantId)])).rows.map(mMenu); },
     async createMenuItem(i) {
-      await q('INSERT INTO menu(id,category,name,price,emoji,image,sort_order,modifier_groups,recipe,sku,barcode,stock,track_stock,tax_rate,schedule,is_combo,combo_items,active,tenant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)',
-        [i.id, i.category, i.name, i.price, i.emoji, i.image ?? null, i.sortOrder ?? 0, JSON.stringify(i.modifierGroups ?? []), JSON.stringify(i.recipe ?? []), i.sku ?? null, i.barcode ?? null, i.stock ?? null, i.trackStock ?? false, i.taxRate ?? null, i.schedule ? JSON.stringify(i.schedule) : null, i.isCombo ?? false, JSON.stringify(i.comboItems ?? []), i.active, T(i.tenantId)]);
+      await q('INSERT INTO menu(id,category,name,price,emoji,image,sort_order,modifier_groups,recipe,sku,barcode,stock,track_stock,tax_rate,schedule,is_combo,combo_items,weighted,weight_unit,active,tenant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)',
+        [i.id, i.category, i.name, i.price, i.emoji, i.image ?? null, i.sortOrder ?? 0, JSON.stringify(i.modifierGroups ?? []), JSON.stringify(i.recipe ?? []), i.sku ?? null, i.barcode ?? null, i.stock ?? null, i.trackStock ?? false, i.taxRate ?? null, i.schedule ? JSON.stringify(i.schedule) : null, i.isCombo ?? false, JSON.stringify(i.comboItems ?? []), i.weighted ?? false, i.weightUnit ?? 'lb', i.active, T(i.tenantId)]);
       return i;
     },
     async updateMenuItem(id, patch) {
       const cur = (await q('SELECT * FROM menu WHERE id=$1', [id])).rows[0];
       if (!cur) return null; const n = { ...mMenu(cur), ...patch };
-      await q('UPDATE menu SET category=$2,name=$3,price=$4,emoji=$5,image=$6,sort_order=$7,modifier_groups=$8,recipe=$9,sku=$10,barcode=$11,stock=$12,track_stock=$13,tax_rate=$14,schedule=$15,is_combo=$16,combo_items=$17,active=$18 WHERE id=$1',
-        [id, n.category, n.name, n.price, n.emoji, n.image ?? null, n.sortOrder ?? 0, JSON.stringify(n.modifierGroups ?? []), JSON.stringify(n.recipe ?? []), n.sku ?? null, n.barcode ?? null, n.stock ?? null, n.trackStock ?? false, n.taxRate ?? null, n.schedule ? JSON.stringify(n.schedule) : null, n.isCombo ?? false, JSON.stringify(n.comboItems ?? []), n.active]);
+      await q('UPDATE menu SET category=$2,name=$3,price=$4,emoji=$5,image=$6,sort_order=$7,modifier_groups=$8,recipe=$9,sku=$10,barcode=$11,stock=$12,track_stock=$13,tax_rate=$14,schedule=$15,is_combo=$16,combo_items=$17,weighted=$18,weight_unit=$19,active=$20 WHERE id=$1',
+        [id, n.category, n.name, n.price, n.emoji, n.image ?? null, n.sortOrder ?? 0, JSON.stringify(n.modifierGroups ?? []), JSON.stringify(n.recipe ?? []), n.sku ?? null, n.barcode ?? null, n.stock ?? null, n.trackStock ?? false, n.taxRate ?? null, n.schedule ? JSON.stringify(n.schedule) : null, n.isCombo ?? false, JSON.stringify(n.comboItems ?? []), n.weighted ?? false, n.weightUnit ?? 'lb', n.active]);
       return n;
     },
     async deleteMenuItem(id) { await q('DELETE FROM menu WHERE id=$1', [id]); },
@@ -391,6 +409,53 @@ export async function makePgStore(poolOverride) {
       const cur = (await q('SELECT * FROM campaigns WHERE id=$1', [id])).rows[0];
       if (!cur) return null; const n = { ...mCampaign(cur), ...patch };
       await q('UPDATE campaigns SET recipients=$2,sent=$3,failed=$4 WHERE id=$1', [id, n.recipients ?? 0, n.sent ?? 0, n.failed ?? 0]);
+      return n;
+    },
+
+    // vendors / suppliers (tenant-scoped)
+    async listVendors(tenantId) { return (await q('SELECT * FROM vendors WHERE tenant_id=$1 ORDER BY name', [T(tenantId)])).rows.map(mVendor); },
+    async getVendor(id) { const r = (await q('SELECT * FROM vendors WHERE id=$1', [id])).rows[0]; return r ? mVendor(r) : null; },
+    async createVendor(v) {
+      await q('INSERT INTO vendors(id,name,contact,email,phone,notes,tenant_id,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',
+        [v.id, v.name, v.contact ?? '', v.email ?? '', v.phone ?? '', v.notes ?? '', T(v.tenantId), v.createdAt ?? Date.now()]);
+      return v;
+    },
+    async updateVendor(id, patch) {
+      const cur = (await q('SELECT * FROM vendors WHERE id=$1', [id])).rows[0];
+      if (!cur) return null; const n = { ...mVendor(cur), ...patch };
+      await q('UPDATE vendors SET name=$2,contact=$3,email=$4,phone=$5,notes=$6 WHERE id=$1', [id, n.name, n.contact ?? '', n.email ?? '', n.phone ?? '', n.notes ?? '']);
+      return n;
+    },
+    async deleteVendor(id) { await q('DELETE FROM vendors WHERE id=$1', [id]); },
+
+    // purchase orders (tenant-scoped)
+    async listPurchaseOrders(tenantId) { return (await q('SELECT * FROM purchase_orders WHERE tenant_id=$1 ORDER BY created_at DESC', [T(tenantId)])).rows.map(mPO); },
+    async getPurchaseOrder(id) { const r = (await q('SELECT * FROM purchase_orders WHERE id=$1', [id])).rows[0]; return r ? mPO(r) : null; },
+    async createPurchaseOrder(p) {
+      await q('INSERT INTO purchase_orders(id,vendor_id,vendor_name,status,lines,total,notes,received_at,tenant_id,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+        [p.id, p.vendorId ?? null, p.vendorName ?? '', p.status ?? 'draft', JSON.stringify(p.lines ?? []), p.total ?? 0, p.notes ?? '', p.receivedAt ?? null, T(p.tenantId), p.createdAt ?? Date.now()]);
+      return p;
+    },
+    async updatePurchaseOrder(id, patch) {
+      const cur = (await q('SELECT * FROM purchase_orders WHERE id=$1', [id])).rows[0];
+      if (!cur) return null; const n = { ...mPO(cur), ...patch };
+      await q('UPDATE purchase_orders SET vendor_id=$2,vendor_name=$3,status=$4,lines=$5,total=$6,notes=$7,received_at=$8 WHERE id=$1',
+        [id, n.vendorId ?? null, n.vendorName ?? '', n.status, JSON.stringify(n.lines ?? []), n.total ?? 0, n.notes ?? '', n.receivedAt ?? null]);
+      return n;
+    },
+
+    // stocktakes / cycle counts (tenant-scoped)
+    async listStocktakes(tenantId) { return (await q('SELECT * FROM stocktakes WHERE tenant_id=$1 ORDER BY created_at DESC', [T(tenantId)])).rows.map(mStocktake); },
+    async getStocktake(id) { const r = (await q('SELECT * FROM stocktakes WHERE id=$1', [id])).rows[0]; return r ? mStocktake(r) : null; },
+    async createStocktake(s) {
+      await q('INSERT INTO stocktakes(id,name,status,counts,tenant_id,created_at,closed_at) VALUES($1,$2,$3,$4,$5,$6,$7)',
+        [s.id, s.name, s.status ?? 'open', JSON.stringify(s.counts ?? []), T(s.tenantId), s.createdAt ?? Date.now(), s.closedAt ?? null]);
+      return s;
+    },
+    async updateStocktake(id, patch) {
+      const cur = (await q('SELECT * FROM stocktakes WHERE id=$1', [id])).rows[0];
+      if (!cur) return null; const n = { ...mStocktake(cur), ...patch };
+      await q('UPDATE stocktakes SET name=$2,status=$3,counts=$4,closed_at=$5 WHERE id=$1', [id, n.name, n.status, JSON.stringify(n.counts ?? []), n.closedAt ?? null]);
       return n;
     },
   };

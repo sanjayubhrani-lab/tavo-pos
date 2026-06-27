@@ -17,7 +17,7 @@ export function makeJsonStore() {
     async reset({ menu = [], tables = [], staff = [], users = [], inventory = [], tenants } = {}) {
       const db = read();
       db.menu = menu; db.tables = tables; db.staff = staff; db.users = users; db.inventory = inventory;
-      db.orders = []; db.payments = []; db.customers = []; db.giftcards = []; db.drawers = []; db.shifts = []; db.messages = []; db.campaigns = [];
+      db.orders = []; db.payments = []; db.customers = []; db.giftcards = []; db.drawers = []; db.shifts = []; db.messages = []; db.campaigns = []; db.vendors = []; db.purchaseOrders = []; db.stocktakes = [];
       db.tenants = tenants || [{ id: DEFAULT_TENANT, name: 'Default', slug: DEFAULT_TENANT, plan: 'free', createdAt: Date.now() }];
       write(db);
     },
@@ -131,5 +131,24 @@ export function makeJsonStore() {
     async getCampaign(id) { return (read().campaigns || []).find(c => c.id === id) || null; },
     async createCampaign(c) { const db = read(); (db.campaigns ||= []).push(c); write(db); return c; },
     async updateCampaign(id, patch) { const db = read(); const c = (db.campaigns ||= []).find(x => x.id === id); if (!c) return null; Object.assign(c, patch); write(db); return c; },
+
+    // ---- vendors / suppliers (scoped) ----
+    async listVendors(tenantId) { return (read().vendors || []).filter(v => owns(v, tenantId)).sort((a, b) => (a.name || '').localeCompare(b.name || '')); },
+    async getVendor(id) { return (read().vendors || []).find(v => v.id === id) || null; },
+    async createVendor(v) { const db = read(); (db.vendors ||= []).push(v); write(db); return v; },
+    async updateVendor(id, patch) { const db = read(); const v = (db.vendors ||= []).find(x => x.id === id); if (!v) return null; Object.assign(v, patch); write(db); return v; },
+    async deleteVendor(id) { const db = read(); db.vendors = (db.vendors || []).filter(v => v.id !== id); write(db); },
+
+    // ---- purchase orders (scoped) ----
+    async listPurchaseOrders(tenantId) { return (read().purchaseOrders || []).filter(p => owns(p, tenantId)).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)); },
+    async getPurchaseOrder(id) { return (read().purchaseOrders || []).find(p => p.id === id) || null; },
+    async createPurchaseOrder(p) { const db = read(); (db.purchaseOrders ||= []).push(p); write(db); return p; },
+    async updatePurchaseOrder(id, patch) { const db = read(); const p = (db.purchaseOrders ||= []).find(x => x.id === id); if (!p) return null; Object.assign(p, patch); write(db); return p; },
+
+    // ---- stocktakes / cycle counts (scoped) ----
+    async listStocktakes(tenantId) { return (read().stocktakes || []).filter(s => owns(s, tenantId)).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)); },
+    async getStocktake(id) { return (read().stocktakes || []).find(s => s.id === id) || null; },
+    async createStocktake(s) { const db = read(); (db.stocktakes ||= []).push(s); write(db); return s; },
+    async updateStocktake(id, patch) { const db = read(); const s = (db.stocktakes ||= []).find(x => x.id === id); if (!s) return null; Object.assign(s, patch); write(db); return s; },
   };
 }
