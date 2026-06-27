@@ -25,7 +25,9 @@ const DEFAULTS = {
   vendors: [],     // {id, name, contact, email, phone, notes, tenantId, createdAt}  — suppliers
   purchaseOrders: [], // {id, vendorId, vendorName, status, lines, total, notes, receivedAt, tenantId, createdAt}  — POs
   stocktakes: [],  // {id, name, status, counts, tenantId, createdAt, closedAt}  — cycle counts
-  reservations: [] // {id, kind, name, phone, partySize, time, quotedWait, status, tableNumber, notes, tenantId, createdAt, seatedAt}
+  reservations: [], // {id, kind, name, phone, partySize, time, quotedWait, status, tableNumber, notes, tenantId, createdAt, seatedAt}
+  houseAccounts: [], // {id, name, contact, email, phone, creditLimit, balance, tenantId, createdAt}
+  invoices: []     // {id, accountId, accountName, lines, total, status, dueDate, notes, tenantId, createdAt, paidAt}
 };
 
 function ensureFile() {

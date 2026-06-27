@@ -1055,6 +1055,65 @@ app.post('/api/reservations/:id/status', requireAuth, requireRole('manager', 'se
   res.json(await store.updateReservation(req.params.id, { status }));
 }));
 
+// ============================================================================
+//  House accounts + invoicing (charge now, pay later)
+// ============================================================================
+app.get('/api/house-accounts', requireAuth, requireRole('manager'), h(async (req, res) => res.json(await store.listHouseAccounts(tid(req)))));
+app.get('/api/house-accounts/:id', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const a = await store.getHouseAccount(req.params.id);
+  if (!a || (a.tenantId || DEFAULT_TENANT) !== tid(req)) return res.status(404).json({ error: 'not found' });
+  const invoices = (await store.listInvoices(tid(req))).filter(i => i.accountId === a.id);
+  res.json({ ...a, invoices, available: round((a.creditLimit || 0) - (a.balance || 0)) });
+}));
+app.post('/api/house-accounts', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const { name, contact, email, phone, creditLimit } = req.body;
+  if (!name) return res.status(400).json({ error: 'account name required' });
+  const a = { id: nanoid(8), name: String(name).slice(0, 80), contact: contact ? String(contact) : '', email: email ? String(email) : '', phone: phone ? String(phone) : '', creditLimit: Math.max(0, Number(creditLimit) || 0), balance: 0, tenantId: tid(req), createdAt: Date.now() };
+  await store.createHouseAccount(a);
+  res.status(201).json(a);
+}));
+app.put('/api/house-accounts/:id', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const cur = await store.getHouseAccount(req.params.id);
+  if (!cur || (cur.tenantId || DEFAULT_TENANT) !== tid(req)) return res.status(404).json({ error: 'not found' });
+  const patch = {};
+  for (const k of ['name', 'contact', 'email', 'phone']) if (req.body[k] != null) patch[k] = String(req.body[k]);
+  if (req.body.creditLimit != null) patch.creditLimit = Math.max(0, Number(req.body.creditLimit) || 0);
+  res.json(await store.updateHouseAccount(req.params.id, patch));
+}));
+
+// Charge an amount to an account: raises the balance (within credit limit) and opens an invoice.
+app.post('/api/house-accounts/:id/charge', requireAuth, requireRole('manager', 'server'), h(async (req, res) => {
+  const a = await store.getHouseAccount(req.params.id);
+  if (!a || (a.tenantId || DEFAULT_TENANT) !== tid(req)) return res.status(404).json({ error: 'not found' });
+  const { amount, lines = [], notes = '', dueDate = null } = req.body;
+  const amt = round(Number(amount) || (Array.isArray(lines) ? priceLines(lines).total : 0));
+  if (!(amt > 0)) return res.status(400).json({ error: 'charge amount required' });
+  const limit = a.creditLimit || 0;
+  if (limit > 0 && (a.balance || 0) + amt > limit + 1e-9) return res.status(400).json({ error: `over credit limit — available ${(limit - a.balance).toFixed(2)}` });
+  const invoice = { id: nanoid(8), accountId: a.id, accountName: a.name, lines: Array.isArray(lines) ? lines : [], total: amt, status: 'open', dueDate: dueDate ? Number(dueDate) : null, notes: String(notes).slice(0, 200), tenantId: tid(req), createdAt: Date.now(), paidAt: null };
+  await store.createInvoice(invoice);
+  const updated = await store.updateHouseAccount(a.id, { balance: round((a.balance || 0) + amt) });
+  res.status(201).json({ invoice, account: updated });
+}));
+
+app.get('/api/invoices', requireAuth, requireRole('manager'), h(async (req, res) => {
+  let list = await store.listInvoices(tid(req));
+  if (req.query.accountId) list = list.filter(i => i.accountId === req.query.accountId);
+  if (req.query.status) list = list.filter(i => i.status === req.query.status);
+  res.json(list);
+}));
+
+// Pay an invoice: closes it and lowers the account balance.
+app.post('/api/invoices/:id/pay', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const inv = await store.getInvoice(req.params.id);
+  if (!inv || (inv.tenantId || DEFAULT_TENANT) !== tid(req)) return res.status(404).json({ error: 'not found' });
+  if (inv.status === 'paid') return res.status(400).json({ error: 'already paid' });
+  const a = await store.getHouseAccount(inv.accountId);
+  if (a) await store.updateHouseAccount(a.id, { balance: round(Math.max(0, (a.balance || 0) - (inv.total || 0))) });
+  const out = await store.updateInvoice(inv.id, { status: 'paid', paidAt: Date.now() });
+  res.json(out);
+}));
+
 // ---- loyalty config ----
 app.get('/api/loyalty/config', requireAuth, (req, res) =>
   res.json({ earnRate: LOYALTY_EARN, redeemRate: LOYALTY_REDEEM }));

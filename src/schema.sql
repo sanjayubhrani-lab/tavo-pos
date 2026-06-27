@@ -242,5 +242,31 @@ CREATE TABLE IF NOT EXISTS reservations (
   seated_at    BIGINT
 );
 
+CREATE TABLE IF NOT EXISTS house_accounts (
+  id           TEXT PRIMARY KEY,
+  name         TEXT,
+  contact      TEXT,
+  email        TEXT,
+  phone        TEXT,
+  credit_limit NUMERIC(12,2) DEFAULT 0,
+  balance      NUMERIC(12,2) DEFAULT 0,
+  tenant_id    TEXT DEFAULT 'default',
+  created_at   BIGINT
+);
+
+CREATE TABLE IF NOT EXISTS invoices (
+  id           TEXT PRIMARY KEY,
+  account_id   TEXT,
+  account_name TEXT,
+  lines        JSONB DEFAULT '[]',
+  total        NUMERIC(12,2) DEFAULT 0,
+  status       TEXT DEFAULT 'open',
+  due_date     BIGINT,
+  notes        TEXT,
+  tenant_id    TEXT DEFAULT 'default',
+  created_at   BIGINT,
+  paid_at      BIGINT
+);
+
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_payments_stripe ON payments(stripe_id);
