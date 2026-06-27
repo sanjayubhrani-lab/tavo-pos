@@ -1,5 +1,5 @@
 // Payment-gateway selector. One interface, many processors.
-// Pick with PAYMENT_GATEWAY=stripe|fiserv|tsys|mock. If unset, auto-detects
+// Pick with PAYMENT_GATEWAY=stripe|fiserv|tsys|valor|mock. If unset, auto-detects
 // Stripe (when STRIPE_SECRET_KEY is present) else falls back to the mock gateway.
 //
 // Every gateway implements: createCharge(amount, meta), retrieveStatus(id),
@@ -9,6 +9,7 @@ import { makeMockGateway } from './mock.js';
 import { makeStripeGateway } from './stripe.js';
 import { makeFiservGateway } from './fiserv.js';
 import { makeTsysGateway } from './tsys.js';
+import { makeValorGateway } from './valor.js';
 
 let _gw = null;
 
@@ -23,10 +24,12 @@ export function getGateway() {
     _gw = makeFiservGateway();
   } else if (choice === 'tsys') {
     _gw = makeTsysGateway();
+  } else if (choice === 'valor') {
+    _gw = makeValorGateway();
   } else {
     _gw = makeMockGateway();
   }
   return _gw;
 }
 
-export const GATEWAYS = ['stripe', 'fiserv', 'tsys', 'mock'];
+export const GATEWAYS = ['stripe', 'fiserv', 'tsys', 'valor', 'mock'];
