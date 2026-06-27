@@ -37,6 +37,7 @@ const mOrder = r => ({ id: r.id, number: num(r.number), table: r.table_no == nul
   lines: r.lines, subtotal: num(r.subtotal), tax: num(r.tax), total: num(r.total),
   status: r.status, voidReason: r.void_reason ?? null,
   channel: r.channel ?? 'pos', platform: r.platform ?? null, customer: r.customer ?? null, externalId: r.external_id ?? null,
+  firedCourses: r.fired_courses ?? [],
   createdAt: num(r.created_at), firedAt: r.fired_at == null ? undefined : num(r.fired_at), tenantId: r.tenant_id ?? DEFAULT_TENANT });
 const mPay = r => ({ id: r.id, orderId: r.order_id, table: r.table_no == null ? null : num(r.table_no),
   lines: r.lines, subtotal: num(r.subtotal), tax: num(r.tax), tip: num(r.tip), total: num(r.total),
@@ -96,6 +97,7 @@ export async function makePgStore(poolOverride) {
         'ALTER TABLE orders ADD COLUMN platform TEXT',
         'ALTER TABLE orders ADD COLUMN customer TEXT',
         'ALTER TABLE orders ADD COLUMN external_id TEXT',
+        "ALTER TABLE orders ADD COLUMN fired_courses JSONB DEFAULT '[]'",
         "ALTER TABLE menu ADD COLUMN modifier_groups JSONB DEFAULT '[]'",
         "ALTER TABLE menu ADD COLUMN tenant_id TEXT DEFAULT 'default'",
         "ALTER TABLE tables ADD COLUMN tenant_id TEXT DEFAULT 'default'",
@@ -254,17 +256,17 @@ export async function makePgStore(poolOverride) {
     async getOrder(id) { const r = (await q('SELECT * FROM orders WHERE id=$1', [id])).rows[0]; return r ? mOrder(r) : null; },
     async findOrderByExternalId(externalId, tenantId) { const r = (await q('SELECT * FROM orders WHERE external_id=$1 AND tenant_id=$2', [externalId, T(tenantId)])).rows[0]; return r ? mOrder(r) : null; },
     async createOrder(o) {
-      await q(`INSERT INTO orders(id,number,table_no,lines,subtotal,tax,total,status,channel,platform,customer,external_id,created_at,fired_at,tenant_id)
-               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+      await q(`INSERT INTO orders(id,number,table_no,lines,subtotal,tax,total,status,channel,platform,customer,external_id,fired_courses,created_at,fired_at,tenant_id)
+               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
         [o.id, o.number, o.table, JSON.stringify(o.lines), o.subtotal, o.tax, o.total, o.status,
-         o.channel ?? 'pos', o.platform ?? null, o.customer ?? null, o.externalId ?? null, o.createdAt, o.firedAt ?? null, T(o.tenantId)]);
+         o.channel ?? 'pos', o.platform ?? null, o.customer ?? null, o.externalId ?? null, JSON.stringify(o.firedCourses ?? []), o.createdAt, o.firedAt ?? null, T(o.tenantId)]);
       return o;
     },
     async updateOrder(id, patch) {
       const cur = (await q('SELECT * FROM orders WHERE id=$1', [id])).rows[0];
       if (!cur) return null; const n = { ...mOrder(cur), ...patch };
-      await q('UPDATE orders SET status=$2, fired_at=$3, void_reason=$4 WHERE id=$1',
-        [id, n.status, n.firedAt ?? null, n.voidReason ?? null]);
+      await q('UPDATE orders SET status=$2, fired_at=$3, void_reason=$4, fired_courses=$5 WHERE id=$1',
+        [id, n.status, n.firedAt ?? null, n.voidReason ?? null, JSON.stringify(n.firedCourses ?? [])]);
       return n;
     },
 
