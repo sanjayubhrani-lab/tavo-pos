@@ -17,7 +17,7 @@ export function makeJsonStore() {
     async reset({ menu = [], tables = [], staff = [], users = [], inventory = [], tenants } = {}) {
       const db = read();
       db.menu = menu; db.tables = tables; db.staff = staff; db.users = users; db.inventory = inventory;
-      db.orders = []; db.payments = []; db.customers = []; db.giftcards = []; db.drawers = []; db.shifts = []; db.messages = []; db.campaigns = []; db.vendors = []; db.purchaseOrders = []; db.stocktakes = []; db.reservations = []; db.houseAccounts = []; db.invoices = [];
+      db.orders = []; db.payments = []; db.customers = []; db.giftcards = []; db.drawers = []; db.shifts = []; db.messages = []; db.campaigns = []; db.vendors = []; db.purchaseOrders = []; db.stocktakes = []; db.reservations = []; db.houseAccounts = []; db.invoices = []; db.locations = [];
       db.tenants = tenants || [{ id: DEFAULT_TENANT, name: 'Default', slug: DEFAULT_TENANT, plan: 'free', createdAt: Date.now() }];
       write(db);
     },
@@ -168,5 +168,12 @@ export function makeJsonStore() {
     async getInvoice(id) { return (read().invoices || []).find(i => i.id === id) || null; },
     async createInvoice(i) { const db = read(); (db.invoices ||= []).push(i); write(db); return i; },
     async updateInvoice(id, patch) { const db = read(); const i = (db.invoices ||= []).find(x => x.id === id); if (!i) return null; Object.assign(i, patch); write(db); return i; },
+
+    // ---- locations (multi-site registry, scoped to the owning tenant) ----
+    async listLocations(tenantId) { return (read().locations || []).filter(l => owns(l, tenantId)).sort((a, b) => (a.name || '').localeCompare(b.name || '')); },
+    async getLocation(id) { return (read().locations || []).find(l => l.id === id) || null; },
+    async createLocation(l) { const db = read(); (db.locations ||= []).push(l); write(db); return l; },
+    async updateLocation(id, patch) { const db = read(); const l = (db.locations ||= []).find(x => x.id === id); if (!l) return null; Object.assign(l, patch); write(db); return l; },
+    async deleteLocation(id) { const db = read(); db.locations = (db.locations || []).filter(l => l.id !== id); write(db); },
   };
 }

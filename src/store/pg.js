@@ -23,6 +23,7 @@ const mStocktake = r => ({ id: r.id, name: r.name, status: r.status, counts: r.c
 const mResv = r => ({ id: r.id, kind: r.kind, name: r.name, phone: r.phone ?? '', partySize: num(r.party_size) || 1, time: r.time == null ? null : num(r.time), quotedWait: r.quoted_wait == null ? null : num(r.quoted_wait), status: r.status, tableNumber: r.table_number == null ? null : num(r.table_number), notes: r.notes ?? '', tenantId: r.tenant_id ?? DEFAULT_TENANT, createdAt: num(r.created_at), seatedAt: r.seated_at == null ? null : num(r.seated_at) });
 const mHouse = r => ({ id: r.id, name: r.name, contact: r.contact ?? '', email: r.email ?? '', phone: r.phone ?? '', creditLimit: num(r.credit_limit) || 0, balance: num(r.balance) || 0, tenantId: r.tenant_id ?? DEFAULT_TENANT, createdAt: num(r.created_at) });
 const mInvoice = r => ({ id: r.id, accountId: r.account_id, accountName: r.account_name ?? '', lines: r.lines ?? [], total: num(r.total) || 0, status: r.status, dueDate: r.due_date == null ? null : num(r.due_date), notes: r.notes ?? '', tenantId: r.tenant_id ?? DEFAULT_TENANT, createdAt: num(r.created_at), paidAt: r.paid_at == null ? null : num(r.paid_at) });
+const mLocation = r => ({ id: r.id, name: r.name, address: r.address ?? '', slug: r.slug, tenantId: r.tenant_id ?? DEFAULT_TENANT, createdAt: num(r.created_at) });
 const mInv = r => ({ id: r.id, name: r.name, unit: r.unit ?? 'unit', qty: num(r.qty) || 0, parLevel: num(r.par_level) || 0, cost: num(r.cost) || 0, tenantId: r.tenant_id ?? DEFAULT_TENANT });
 const mCust = r => ({ id: r.id, name: r.name, phone: r.phone, email: r.email ?? null, notes: r.notes ?? '', marketingOptIn: r.marketing_opt_in !== false, points: num(r.points) || 0, visits: num(r.visits) || 0, totalSpent: num(r.total_spent) || 0, tenantId: r.tenant_id ?? DEFAULT_TENANT, createdAt: num(r.created_at) });
 const mMsg = r => ({ id: r.id, channel: r.channel, kind: r.kind, to: r.to_addr, customerId: r.customer_id ?? null, campaignId: r.campaign_id ?? null, subject: r.subject ?? '', body: r.body ?? '', status: r.status, error: r.error ?? null, tenantId: r.tenant_id ?? DEFAULT_TENANT, createdAt: num(r.created_at) });
@@ -195,6 +196,10 @@ export async function makePgStore(poolOverride) {
            id TEXT PRIMARY KEY, account_id TEXT, account_name TEXT, lines JSONB DEFAULT '[]',
            total NUMERIC(12,2) DEFAULT 0, status TEXT DEFAULT 'open', due_date BIGINT, notes TEXT,
            tenant_id TEXT DEFAULT 'default', created_at BIGINT, paid_at BIGINT)`,
+        // multi-location registry
+        `CREATE TABLE IF NOT EXISTS locations (
+           id TEXT PRIMARY KEY, name TEXT, address TEXT, slug TEXT,
+           tenant_id TEXT DEFAULT 'default', created_at BIGINT)`,
       ];
       for (const u of upgrades) { try { await q(u); } catch { /* column already present */ } }
     },
@@ -216,7 +221,7 @@ export async function makePgStore(poolOverride) {
     async seedTenant(data) { await insertSeed(q, data); },
 
     async reset({ menu = [], tables = [], staff = [], users = [], inventory = [], tenants } = {}) {
-      for (const t of ['menu', 'tables', 'orders', 'payments', 'users', 'staff', 'inventory', 'customers', 'giftcards', 'drawers', 'shifts', 'messages', 'campaigns', 'vendors', 'purchase_orders', 'stocktakes', 'reservations', 'house_accounts', 'invoices', 'tenants'])
+      for (const t of ['menu', 'tables', 'orders', 'payments', 'users', 'staff', 'inventory', 'customers', 'giftcards', 'drawers', 'shifts', 'messages', 'campaigns', 'vendors', 'purchase_orders', 'stocktakes', 'reservations', 'house_accounts', 'invoices', 'locations', 'tenants'])
         await q(`DELETE FROM ${t}`);
       const tlist = tenants || [{ id: DEFAULT_TENANT, name: 'Default', slug: DEFAULT_TENANT, plan: 'free', mode: 'restaurant', createdAt: Date.now() }];
       for (const t of tlist)
@@ -528,5 +533,21 @@ export async function makePgStore(poolOverride) {
       await q('UPDATE invoices SET status=$2,paid_at=$3,notes=$4 WHERE id=$1', [id, n.status, n.paidAt ?? null, n.notes ?? '']);
       return n;
     },
+
+    // locations (multi-site registry, tenant-scoped)
+    async listLocations(tenantId) { return (await q('SELECT * FROM locations WHERE tenant_id=$1 ORDER BY name', [T(tenantId)])).rows.map(mLocation); },
+    async getLocation(id) { const r = (await q('SELECT * FROM locations WHERE id=$1', [id])).rows[0]; return r ? mLocation(r) : null; },
+    async createLocation(l) {
+      await q('INSERT INTO locations(id,name,address,slug,tenant_id,created_at) VALUES($1,$2,$3,$4,$5,$6)',
+        [l.id, l.name, l.address ?? '', l.slug, T(l.tenantId), l.createdAt ?? Date.now()]);
+      return l;
+    },
+    async updateLocation(id, patch) {
+      const cur = (await q('SELECT * FROM locations WHERE id=$1', [id])).rows[0];
+      if (!cur) return null; const n = { ...mLocation(cur), ...patch };
+      await q('UPDATE locations SET name=$2,address=$3,slug=$4 WHERE id=$1', [id, n.name, n.address ?? '', n.slug]);
+      return n;
+    },
+    async deleteLocation(id) { await q('DELETE FROM locations WHERE id=$1', [id]); },
   };
 }
