@@ -1136,7 +1136,62 @@ app.get('/api/display', h(async (req, res) => {
   const t = await resolveTenant(req.query.tenant);
   if (!t) return res.status(404).json({ error: 'unknown business' });
   const s = displayState.get(t.id) || { lines: [], subtotal: 0, tax: 0, total: 0, message: null, updatedAt: 0 };
-  res.json({ business: t.name, ...s });
+  res.json({ business: t.name, ...s, checkout: checkoutState.get(t.id) || null });
+}));
+
+// ----------------------------------------------------------------------------
+//  Interactive dual-screen checkout (Clover-Duo style): the customer screen
+//  guides the guest through tip → pay → receipt, posting choices back to the POS.
+// ----------------------------------------------------------------------------
+const checkoutState = new Map();   // tenantId -> { sessionId, phase, baseTotal, tip, receipt, ... }
+
+// POS starts a customer-screen checkout. Returns the sessionId to poll.
+app.post('/api/display/checkout', requireAuth, h(async (req, res) => {
+  const { lines = [], subtotal = 0, tax = 0, total = 0, tipPresets } = req.body;
+  const presets = Array.isArray(tipPresets) && tipPresets.length
+    ? tipPresets.map(n => Math.max(0, Number(n) || 0)).slice(0, 4)
+    : [0.18, 0.20, 0.25];
+  const session = {
+    sessionId: nanoid(10), phase: 'tip',
+    lines: (Array.isArray(lines) ? lines : []).slice(0, 60).map(l => ({ name: String(l.name || ''), qty: Number(l.qty) || 0, price: Number(l.price) || 0 })),
+    subtotal: round(Number(subtotal) || 0), tax: round(Number(tax) || 0),
+    baseTotal: round(Number(total) || 0), tipPresets: presets,
+    tip: null, receipt: null, contact: null, message: null, updatedAt: Date.now(),
+  };
+  checkoutState.set(tid(req), session);
+  res.status(201).json(session);
+}));
+
+// POS advances the session (approved / declined / done / idle) after processing.
+app.post('/api/display/checkout/advance', requireAuth, h(async (req, res) => {
+  const cur = checkoutState.get(tid(req));
+  const { sessionId, phase, message } = req.body;
+  if (!cur || cur.sessionId !== sessionId) return res.status(409).json({ error: 'no matching active checkout' });
+  if (!['approved', 'declined', 'done', 'idle', 'await_card'].includes(phase)) return res.status(400).json({ error: 'bad phase' });
+  if (phase === 'idle') { checkoutState.delete(tid(req)); return res.json({ ok: true, cleared: true }); }
+  cur.phase = phase; cur.message = message ? String(message).slice(0, 120) : cur.message; cur.updatedAt = Date.now();
+  res.json(cur);
+}));
+
+// The customer screen posts the guest's choices back (public — scoped by session).
+app.post('/api/display/respond', h(async (req, res) => {
+  const t = await resolveTenant(req.body.tenant);
+  if (!t) return res.status(404).json({ error: 'unknown business' });
+  const cur = checkoutState.get(t.id);
+  if (!cur || cur.sessionId !== req.body.sessionId) return res.status(409).json({ error: 'no matching active checkout' });
+  if (req.body.tip != null && cur.phase === 'tip') {
+    cur.tip = Math.max(0, round(Number(req.body.tip) || 0));
+    cur.phase = 'await_card';   // POS picks this up to charge the card / terminal
+  }
+  if (req.body.receipt != null && (cur.phase === 'approved')) {
+    const r = String(req.body.receipt);
+    if (['email', 'sms', 'print', 'none'].includes(r)) {
+      cur.receipt = r;
+      cur.contact = req.body.contact ? String(req.body.contact).slice(0, 120) : null;
+    }
+  }
+  cur.updatedAt = Date.now();
+  res.json({ ok: true, phase: cur.phase });
 }));
 
 // ============================================================================
