@@ -42,6 +42,7 @@ const mPay = r => ({ id: r.id, orderId: r.order_id, table: r.table_no == null ? 
   discount: num(r.discount) || 0, discountReason: r.discount_reason ?? null, serviceCharge: num(r.service_charge) || 0,
   method: r.method, status: r.status, stripeId: r.stripe_id, confirmed: r.confirmed,
   customerId: r.customer_id ?? null, pointsEarned: num(r.points_earned) || 0, pointsRedeemed: num(r.points_redeemed) || 0,
+  userId: r.user_id ?? null, userName: r.user_name ?? null,
   refundedAmount: num(r.refunded_amount) || 0, refundedAt: r.refunded_at == null ? null : num(r.refunded_at),
   createdAt: num(r.created_at), tenantId: r.tenant_id ?? DEFAULT_TENANT });
 const mUser = r => ({ id: r.id, name: r.name, role: r.role, pinHash: r.pin_hash, tenantId: r.tenant_id ?? DEFAULT_TENANT });
@@ -136,6 +137,9 @@ export async function makePgStore(poolOverride) {
         'ALTER TABLE payments ADD COLUMN customer_id TEXT',
         'ALTER TABLE payments ADD COLUMN points_earned INTEGER DEFAULT 0',
         'ALTER TABLE payments ADD COLUMN points_redeemed INTEGER DEFAULT 0',
+        // reporting: which staff member rang the sale
+        'ALTER TABLE payments ADD COLUMN user_id TEXT',
+        'ALTER TABLE payments ADD COLUMN user_name TEXT',
         'ALTER TABLE menu ADD COLUMN sku TEXT',
         'ALTER TABLE menu ADD COLUMN barcode TEXT',
         'ALTER TABLE menu ADD COLUMN stock NUMERIC(12,3)',
@@ -261,9 +265,9 @@ export async function makePgStore(poolOverride) {
     // payments (tenant-scoped)
     async listPayments(tenantId) { return (await q('SELECT * FROM payments WHERE tenant_id=$1 ORDER BY created_at', [T(tenantId)])).rows.map(mPay); },
     async createPayment(p) {
-      await q(`INSERT INTO payments(id,order_id,table_no,lines,subtotal,tax,tip,total,discount,discount_reason,service_charge,method,status,stripe_id,confirmed,customer_id,points_earned,points_redeemed,created_at,tenant_id)
-               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
-        [p.id, p.orderId, p.table, JSON.stringify(p.lines), p.subtotal, p.tax, p.tip, p.total, p.discount ?? 0, p.discountReason ?? null, p.serviceCharge ?? 0, p.method, p.status, p.stripeId, p.confirmed ?? false, p.customerId ?? null, p.pointsEarned ?? 0, p.pointsRedeemed ?? 0, p.createdAt, T(p.tenantId)]);
+      await q(`INSERT INTO payments(id,order_id,table_no,lines,subtotal,tax,tip,total,discount,discount_reason,service_charge,method,status,stripe_id,confirmed,customer_id,points_earned,points_redeemed,user_id,user_name,created_at,tenant_id)
+               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
+        [p.id, p.orderId, p.table, JSON.stringify(p.lines), p.subtotal, p.tax, p.tip, p.total, p.discount ?? 0, p.discountReason ?? null, p.serviceCharge ?? 0, p.method, p.status, p.stripeId, p.confirmed ?? false, p.customerId ?? null, p.pointsEarned ?? 0, p.pointsRedeemed ?? 0, p.userId ?? null, p.userName ?? null, p.createdAt, T(p.tenantId)]);
       return p;
     },
     async findPaymentByStripeId(stripeId, tenantId) {
