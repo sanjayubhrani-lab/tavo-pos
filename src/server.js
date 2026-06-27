@@ -373,7 +373,7 @@ app.put('/api/tenant', requireAuth, requireRole('manager'), h(async (req, res) =
 }));
 
 app.post('/api/menu', requireAuth, requireRole('manager'), h(async (req, res) => {
-  const { category, name, price, emoji, image, sortOrder, modifierGroups, recipe, sku, barcode, stock, trackStock, taxRate, schedule, isCombo, comboItems } = req.body;
+  const { category, name, price, emoji, image, sortOrder, modifierGroups, recipe, sku, barcode, stock, trackStock, taxRate, schedule, isCombo, comboItems, weighted, weightUnit } = req.body;
   if (!name || price == null) return res.status(400).json({ error: 'name and price required' });
   const existing = await store.listMenu(tid(req));
   const item = {
@@ -387,6 +387,7 @@ app.post('/api/menu', requireAuth, requireRole('manager'), h(async (req, res) =>
     taxRate: taxRate != null && taxRate !== '' ? Number(taxRate) : null,
     schedule: schedule && typeof schedule === 'object' ? schedule : null,
     isCombo: !!isCombo, comboItems: Array.isArray(comboItems) ? comboItems : [],
+    weighted: !!weighted, weightUnit: weightUnit ? String(weightUnit) : 'lb',
     tenantId: tid(req), active: true,
   };
   await store.createMenuItem(item);
@@ -763,6 +764,123 @@ app.post('/api/inventory/:id/adjust', requireAuth, requireRole('manager'), h(asy
 app.delete('/api/inventory/:id', requireAuth, requireRole('manager'), h(async (req, res) => {
   await store.deleteInventoryItem(req.params.id);
   res.status(204).end();
+}));
+
+// ============================================================================
+//  Purchasing — vendors, purchase orders, receiving stock
+// ============================================================================
+
+// ---- vendors / suppliers ----
+app.get('/api/vendors', requireAuth, requireRole('manager'), h(async (req, res) => res.json(await store.listVendors(tid(req)))));
+app.post('/api/vendors', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const { name, contact, email, phone, notes } = req.body;
+  if (!name) return res.status(400).json({ error: 'vendor name required' });
+  const v = { id: nanoid(8), name: String(name).slice(0, 80), contact: contact ? String(contact) : '', email: email ? String(email) : '', phone: phone ? String(phone) : '', notes: notes ? String(notes).slice(0, 300) : '', tenantId: tid(req), createdAt: Date.now() };
+  await store.createVendor(v);
+  res.status(201).json(v);
+}));
+app.put('/api/vendors/:id', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const cur = await store.getVendor(req.params.id);
+  if (!cur || (cur.tenantId || DEFAULT_TENANT) !== tid(req)) return res.status(404).json({ error: 'not found' });
+  const patch = {};
+  for (const k of ['name', 'contact', 'email', 'phone', 'notes']) if (req.body[k] != null) patch[k] = String(req.body[k]);
+  res.json(await store.updateVendor(req.params.id, patch));
+}));
+app.delete('/api/vendors/:id', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const cur = await store.getVendor(req.params.id);
+  if (!cur || (cur.tenantId || DEFAULT_TENANT) !== tid(req)) return res.status(404).json({ error: 'not found' });
+  await store.deleteVendor(req.params.id);
+  res.status(204).end();
+}));
+
+// ---- purchase orders ----
+const poTotal = lines => round((lines || []).reduce((a, l) => a + (Number(l.qty) || 0) * (Number(l.cost) || 0), 0));
+
+app.get('/api/purchase-orders', requireAuth, requireRole('manager'), h(async (req, res) => res.json(await store.listPurchaseOrders(tid(req)))));
+app.get('/api/purchase-orders/:id', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const po = await store.getPurchaseOrder(req.params.id);
+  (po && (po.tenantId || DEFAULT_TENANT) === tid(req)) ? res.json(po) : res.status(404).json({ error: 'not found' });
+}));
+app.post('/api/purchase-orders', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const { vendorId = null, status = 'ordered', lines = [], notes = '' } = req.body;
+  if (!Array.isArray(lines) || lines.length === 0) return res.status(400).json({ error: 'at least one line item required' });
+  let vendorName = '';
+  if (vendorId) { const v = await store.getVendor(vendorId); if (v && (v.tenantId || DEFAULT_TENANT) === tid(req)) vendorName = v.name; }
+  const clean = lines.map(l => ({ productId: l.productId || null, name: String(l.name || 'Item'), sku: l.sku || null, qty: Number(l.qty) || 0, cost: Number(l.cost) || 0 }));
+  const po = { id: nanoid(8), vendorId, vendorName, status: status === 'draft' ? 'draft' : 'ordered', lines: clean, total: poTotal(clean), notes: String(notes).slice(0, 300), receivedAt: null, tenantId: tid(req), createdAt: Date.now() };
+  await store.createPurchaseOrder(po);
+  res.status(201).json(po);
+}));
+app.put('/api/purchase-orders/:id', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const po = await store.getPurchaseOrder(req.params.id);
+  if (!po || (po.tenantId || DEFAULT_TENANT) !== tid(req)) return res.status(404).json({ error: 'not found' });
+  if (po.status === 'received') return res.status(400).json({ error: 'received POs are locked' });
+  const patch = {};
+  if (Array.isArray(req.body.lines)) { patch.lines = req.body.lines.map(l => ({ productId: l.productId || null, name: String(l.name || 'Item'), sku: l.sku || null, qty: Number(l.qty) || 0, cost: Number(l.cost) || 0 })); patch.total = poTotal(patch.lines); }
+  if (req.body.notes != null) patch.notes = String(req.body.notes).slice(0, 300);
+  if (req.body.status && ['draft', 'ordered', 'cancelled'].includes(req.body.status)) patch.status = req.body.status;
+  res.json(await store.updatePurchaseOrder(req.params.id, patch));
+}));
+
+// Receive a PO: mark received and add each line's qty to the linked product's stock.
+app.post('/api/purchase-orders/:id/receive', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const po = await store.getPurchaseOrder(req.params.id);
+  if (!po || (po.tenantId || DEFAULT_TENANT) !== tid(req)) return res.status(404).json({ error: 'not found' });
+  if (po.status === 'received') return res.status(400).json({ error: 'already received' });
+  let stocked = 0;
+  for (const l of po.lines || []) {
+    if (l.productId && (Number(l.qty) || 0) > 0) { const p = await store.adjustMenuStock(l.productId, Number(l.qty)); if (p) stocked++; }
+  }
+  const out = await store.updatePurchaseOrder(req.params.id, { status: 'received', receivedAt: Date.now() });
+  res.json({ ...out, stockedLines: stocked });
+}));
+
+// ============================================================================
+//  Stocktakes / cycle counts
+// ============================================================================
+app.get('/api/stocktakes', requireAuth, requireRole('manager'), h(async (req, res) => res.json(await store.listStocktakes(tid(req)))));
+app.get('/api/stocktakes/:id', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const s = await store.getStocktake(req.params.id);
+  (s && (s.tenantId || DEFAULT_TENANT) === tid(req)) ? res.json(s) : res.status(404).json({ error: 'not found' });
+}));
+
+// Start a count: snapshot the current tracked products as the expected on-hand.
+app.post('/api/stocktakes', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const products = (await store.listMenu(tid(req))).filter(p => p.trackStock);
+  if (products.length === 0) return res.status(400).json({ error: 'no stock-tracked products to count' });
+  const counts = products.map(p => ({ productId: p.id, name: p.name, sku: p.sku || null, expected: Number(p.stock) || 0, counted: null, variance: null }));
+  const s = { id: nanoid(8), name: String(req.body.name || `Count ${new Date().toLocaleDateString()}`).slice(0, 80), status: 'open', counts, tenantId: tid(req), createdAt: Date.now(), closedAt: null };
+  await store.createStocktake(s);
+  res.status(201).json(s);
+}));
+
+// Save entered counts (partial allowed) without applying.
+app.put('/api/stocktakes/:id', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const s = await store.getStocktake(req.params.id);
+  if (!s || (s.tenantId || DEFAULT_TENANT) !== tid(req)) return res.status(404).json({ error: 'not found' });
+  if (s.status === 'closed') return res.status(400).json({ error: 'count already applied' });
+  const entered = new Map((req.body.counts || []).map(c => [c.productId, c.counted]));
+  const counts = s.counts.map(c => entered.has(c.productId) && entered.get(c.productId) !== null && entered.get(c.productId) !== ''
+    ? { ...c, counted: Number(entered.get(c.productId)) } : c);
+  res.json(await store.updateStocktake(req.params.id, { counts }));
+}));
+
+// Apply the count: set each product's stock to its counted value, record variance, close.
+app.post('/api/stocktakes/:id/apply', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const s = await store.getStocktake(req.params.id);
+  if (!s || (s.tenantId || DEFAULT_TENANT) !== tid(req)) return res.status(404).json({ error: 'not found' });
+  if (s.status === 'closed') return res.status(400).json({ error: 'already applied' });
+  let adjusted = 0; const counts = [];
+  for (const c of s.counts) {
+    if (c.counted == null) { counts.push(c); continue; }
+    const cur = (await store.listMenu(tid(req))).find(p => p.id === c.productId);
+    const expected = cur ? (Number(cur.stock) || 0) : (Number(c.expected) || 0);
+    const delta = Number(c.counted) - expected;
+    if (cur && delta !== 0) { await store.adjustMenuStock(c.productId, delta); adjusted++; }
+    counts.push({ ...c, expected, variance: round(Number(c.counted) - expected) });
+  }
+  const out = await store.updateStocktake(req.params.id, { counts, status: 'closed', closedAt: Date.now() });
+  res.json({ ...out, adjustedProducts: adjusted });
 }));
 
 // ---- loyalty config ----

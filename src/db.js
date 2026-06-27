@@ -21,7 +21,10 @@ const DEFAULTS = {
   drawers: [],     // {id, openedBy, openedAt, startingFloat, paidIn, paidOut, status, ...}  — cash drawer sessions
   shifts: [],      // {id, userId, name, role, clockIn, clockOut, breakMins, wage, status, tenantId}  — time clock
   messages: [],    // {id, channel, kind, to, customerId, campaignId, subject, body, status, tenantId, createdAt}  — digital receipts + marketing
-  campaigns: []    // {id, name, channel, segment, subject, body, recipients, sent, failed, tenantId, createdAt}  — marketing campaigns
+  campaigns: [],   // {id, name, channel, segment, subject, body, recipients, sent, failed, tenantId, createdAt}  — marketing campaigns
+  vendors: [],     // {id, name, contact, email, phone, notes, tenantId, createdAt}  — suppliers
+  purchaseOrders: [], // {id, vendorId, vendorName, status, lines, total, notes, receivedAt, tenantId, createdAt}  — POs
+  stocktakes: []   // {id, name, status, counts, tenantId, createdAt, closedAt}  — cycle counts
 };
 
 function ensureFile() {

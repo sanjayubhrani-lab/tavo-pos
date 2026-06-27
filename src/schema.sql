@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS menu (
   schedule   JSONB,
   is_combo   BOOLEAN DEFAULT FALSE,
   combo_items JSONB DEFAULT '[]',
+  weighted   BOOLEAN DEFAULT FALSE,
+  weight_unit TEXT DEFAULT 'lb',
   tenant_id  TEXT DEFAULT 'default',
   active     BOOLEAN DEFAULT TRUE
 );
@@ -185,6 +187,40 @@ CREATE TABLE IF NOT EXISTS campaigns (
   failed      INTEGER DEFAULT 0,
   tenant_id   TEXT DEFAULT 'default',
   created_at  BIGINT
+);
+
+CREATE TABLE IF NOT EXISTS vendors (
+  id          TEXT PRIMARY KEY,
+  name        TEXT,
+  contact     TEXT,
+  email       TEXT,
+  phone       TEXT,
+  notes       TEXT,
+  tenant_id   TEXT DEFAULT 'default',
+  created_at  BIGINT
+);
+
+CREATE TABLE IF NOT EXISTS purchase_orders (
+  id          TEXT PRIMARY KEY,
+  vendor_id   TEXT,
+  vendor_name TEXT,
+  status      TEXT DEFAULT 'draft',
+  lines       JSONB DEFAULT '[]',
+  total       NUMERIC(12,2) DEFAULT 0,
+  notes       TEXT,
+  received_at BIGINT,
+  tenant_id   TEXT DEFAULT 'default',
+  created_at  BIGINT
+);
+
+CREATE TABLE IF NOT EXISTS stocktakes (
+  id          TEXT PRIMARY KEY,
+  name        TEXT,
+  status      TEXT DEFAULT 'open',
+  counts      JSONB DEFAULT '[]',
+  tenant_id   TEXT DEFAULT 'default',
+  created_at  BIGINT,
+  closed_at   BIGINT
 );
 
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
