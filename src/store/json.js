@@ -17,7 +17,7 @@ export function makeJsonStore() {
     async reset({ menu = [], tables = [], staff = [], users = [], inventory = [], tenants } = {}) {
       const db = read();
       db.menu = menu; db.tables = tables; db.staff = staff; db.users = users; db.inventory = inventory;
-      db.orders = []; db.payments = []; db.customers = []; db.giftcards = []; db.drawers = []; db.shifts = [];
+      db.orders = []; db.payments = []; db.customers = []; db.giftcards = []; db.drawers = []; db.shifts = []; db.messages = []; db.campaigns = [];
       db.tenants = tenants || [{ id: DEFAULT_TENANT, name: 'Default', slug: DEFAULT_TENANT, plan: 'free', createdAt: Date.now() }];
       write(db);
     },
@@ -120,5 +120,16 @@ export function makeJsonStore() {
     async getOpenShiftFor(userId, tenantId) { return (read().shifts || []).find(s => owns(s, tenantId) && s.userId === userId && s.status === 'open') || null; },
     async createShift(s) { const db = read(); (db.shifts ||= []).push(s); write(db); return s; },
     async updateShift(id, patch) { const db = read(); const s = (db.shifts ||= []).find(x => x.id === id); if (!s) return null; Object.assign(s, patch); write(db); return s; },
+
+    // ---- messages (digital receipts + marketing sends) (scoped) ----
+    async listMessages(tenantId) { return (read().messages || []).filter(m => owns(m, tenantId)).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)); },
+    async createMessage(m) { const db = read(); (db.messages ||= []).push(m); write(db); return m; },
+    async updateMessage(id, patch) { const db = read(); const m = (db.messages ||= []).find(x => x.id === id); if (!m) return null; Object.assign(m, patch); write(db); return m; },
+
+    // ---- marketing campaigns (scoped) ----
+    async listCampaigns(tenantId) { return (read().campaigns || []).filter(c => owns(c, tenantId)).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)); },
+    async getCampaign(id) { return (read().campaigns || []).find(c => c.id === id) || null; },
+    async createCampaign(c) { const db = read(); (db.campaigns ||= []).push(c); write(db); return c; },
+    async updateCampaign(id, patch) { const db = read(); const c = (db.campaigns ||= []).find(x => x.id === id); if (!c) return null; Object.assign(c, patch); write(db); return c; },
   };
 }

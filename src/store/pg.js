@@ -17,7 +17,9 @@ const mMenu = r => ({ id: r.id, category: r.category, name: r.name, price: num(r
   taxRate: r.tax_rate == null ? null : num(r.tax_rate), schedule: r.schedule ?? null, isCombo: r.is_combo ?? false, comboItems: r.combo_items ?? [],
   active: r.active, tenantId: r.tenant_id ?? DEFAULT_TENANT });
 const mInv = r => ({ id: r.id, name: r.name, unit: r.unit ?? 'unit', qty: num(r.qty) || 0, parLevel: num(r.par_level) || 0, cost: num(r.cost) || 0, tenantId: r.tenant_id ?? DEFAULT_TENANT });
-const mCust = r => ({ id: r.id, name: r.name, phone: r.phone, points: num(r.points) || 0, visits: num(r.visits) || 0, totalSpent: num(r.total_spent) || 0, tenantId: r.tenant_id ?? DEFAULT_TENANT, createdAt: num(r.created_at) });
+const mCust = r => ({ id: r.id, name: r.name, phone: r.phone, email: r.email ?? null, notes: r.notes ?? '', marketingOptIn: r.marketing_opt_in !== false, points: num(r.points) || 0, visits: num(r.visits) || 0, totalSpent: num(r.total_spent) || 0, tenantId: r.tenant_id ?? DEFAULT_TENANT, createdAt: num(r.created_at) });
+const mMsg = r => ({ id: r.id, channel: r.channel, kind: r.kind, to: r.to_addr, customerId: r.customer_id ?? null, campaignId: r.campaign_id ?? null, subject: r.subject ?? '', body: r.body ?? '', status: r.status, error: r.error ?? null, tenantId: r.tenant_id ?? DEFAULT_TENANT, createdAt: num(r.created_at) });
+const mCampaign = r => ({ id: r.id, name: r.name, channel: r.channel, segment: r.segment, subject: r.subject ?? '', body: r.body ?? '', recipients: num(r.recipients) || 0, sent: num(r.sent) || 0, failed: num(r.failed) || 0, tenantId: r.tenant_id ?? DEFAULT_TENANT, createdAt: num(r.created_at) });
 const mGift = r => ({ id: r.id, code: r.code, balance: num(r.balance) || 0, initialBalance: num(r.initial_balance) || 0, active: r.active, tenantId: r.tenant_id ?? DEFAULT_TENANT, createdAt: num(r.created_at) });
 const mShift = r => ({ id: r.id, userId: r.user_id, name: r.name, role: r.role, clockIn: num(r.clock_in), clockOut: r.clock_out == null ? null : num(r.clock_out),
   breakMins: num(r.break_mins) || 0, wage: num(r.wage) || 0, status: r.status, tenantId: r.tenant_id ?? DEFAULT_TENANT });
@@ -134,6 +136,19 @@ export async function makePgStore(poolOverride) {
         'ALTER TABLE menu ADD COLUMN schedule JSONB',
         'ALTER TABLE menu ADD COLUMN is_combo BOOLEAN DEFAULT FALSE',
         "ALTER TABLE menu ADD COLUMN combo_items JSONB DEFAULT '[]'",
+        // CRM: richer customer profile
+        'ALTER TABLE customers ADD COLUMN email TEXT',
+        'ALTER TABLE customers ADD COLUMN notes TEXT',
+        'ALTER TABLE customers ADD COLUMN marketing_opt_in BOOLEAN DEFAULT TRUE',
+        // messaging: digital receipts + marketing sends
+        `CREATE TABLE IF NOT EXISTS messages (
+           id TEXT PRIMARY KEY, channel TEXT, kind TEXT, to_addr TEXT, customer_id TEXT, campaign_id TEXT,
+           subject TEXT, body TEXT, status TEXT DEFAULT 'sent', error TEXT,
+           tenant_id TEXT DEFAULT 'default', created_at BIGINT)`,
+        `CREATE TABLE IF NOT EXISTS campaigns (
+           id TEXT PRIMARY KEY, name TEXT, channel TEXT, segment TEXT, subject TEXT, body TEXT,
+           recipients INTEGER DEFAULT 0, sent INTEGER DEFAULT 0, failed INTEGER DEFAULT 0,
+           tenant_id TEXT DEFAULT 'default', created_at BIGINT)`,
       ];
       for (const u of upgrades) { try { await q(u); } catch { /* column already present */ } }
     },
@@ -155,7 +170,7 @@ export async function makePgStore(poolOverride) {
     async seedTenant(data) { await insertSeed(q, data); },
 
     async reset({ menu = [], tables = [], staff = [], users = [], inventory = [], tenants } = {}) {
-      for (const t of ['menu', 'tables', 'orders', 'payments', 'users', 'staff', 'inventory', 'customers', 'giftcards', 'drawers', 'shifts', 'tenants'])
+      for (const t of ['menu', 'tables', 'orders', 'payments', 'users', 'staff', 'inventory', 'customers', 'giftcards', 'drawers', 'shifts', 'messages', 'campaigns', 'tenants'])
         await q(`DELETE FROM ${t}`);
       const tlist = tenants || [{ id: DEFAULT_TENANT, name: 'Default', slug: DEFAULT_TENANT, plan: 'free', mode: 'restaurant', createdAt: Date.now() }];
       for (const t of tlist)
@@ -278,15 +293,15 @@ export async function makePgStore(poolOverride) {
       return r ? mCust(r) : null;
     },
     async createCustomer(c) {
-      await q('INSERT INTO customers(id,name,phone,points,visits,total_spent,tenant_id,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',
-        [c.id, c.name, c.phone, c.points ?? 0, c.visits ?? 0, c.totalSpent ?? 0, T(c.tenantId), c.createdAt ?? Date.now()]);
+      await q('INSERT INTO customers(id,name,phone,email,notes,marketing_opt_in,points,visits,total_spent,tenant_id,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
+        [c.id, c.name, c.phone, c.email ?? null, c.notes ?? '', c.marketingOptIn !== false, c.points ?? 0, c.visits ?? 0, c.totalSpent ?? 0, T(c.tenantId), c.createdAt ?? Date.now()]);
       return c;
     },
     async updateCustomer(id, patch) {
       const cur = (await q('SELECT * FROM customers WHERE id=$1', [id])).rows[0];
       if (!cur) return null; const n = { ...mCust(cur), ...patch };
-      await q('UPDATE customers SET name=$2,phone=$3,points=$4,visits=$5,total_spent=$6 WHERE id=$1',
-        [id, n.name, n.phone, n.points ?? 0, n.visits ?? 0, n.totalSpent ?? 0]);
+      await q('UPDATE customers SET name=$2,phone=$3,email=$4,notes=$5,marketing_opt_in=$6,points=$7,visits=$8,total_spent=$9 WHERE id=$1',
+        [id, n.name, n.phone, n.email ?? null, n.notes ?? '', n.marketingOptIn !== false, n.points ?? 0, n.visits ?? 0, n.totalSpent ?? 0]);
       return n;
     },
 
@@ -342,6 +357,35 @@ export async function makePgStore(poolOverride) {
       if (!cur) return null; const n = { ...mShift(cur), ...patch };
       await q('UPDATE shifts SET clock_out=$2,break_mins=$3,wage=$4,status=$5 WHERE id=$1',
         [id, n.clockOut ?? null, n.breakMins ?? 0, n.wage ?? 0, n.status]);
+      return n;
+    },
+
+    // messages (digital receipts + marketing sends) (tenant-scoped)
+    async listMessages(tenantId) { return (await q('SELECT * FROM messages WHERE tenant_id=$1 ORDER BY created_at DESC', [T(tenantId)])).rows.map(mMsg); },
+    async createMessage(m) {
+      await q('INSERT INTO messages(id,channel,kind,to_addr,customer_id,campaign_id,subject,body,status,error,tenant_id,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)',
+        [m.id, m.channel, m.kind, m.to, m.customerId ?? null, m.campaignId ?? null, m.subject ?? '', m.body ?? '', m.status ?? 'sent', m.error ?? null, T(m.tenantId), m.createdAt ?? Date.now()]);
+      return m;
+    },
+    async updateMessage(id, patch) {
+      const cur = (await q('SELECT * FROM messages WHERE id=$1', [id])).rows[0];
+      if (!cur) return null; const n = { ...mMsg(cur), ...patch };
+      await q('UPDATE messages SET status=$2,error=$3 WHERE id=$1', [id, n.status, n.error ?? null]);
+      return n;
+    },
+
+    // marketing campaigns (tenant-scoped)
+    async listCampaigns(tenantId) { return (await q('SELECT * FROM campaigns WHERE tenant_id=$1 ORDER BY created_at DESC', [T(tenantId)])).rows.map(mCampaign); },
+    async getCampaign(id) { const r = (await q('SELECT * FROM campaigns WHERE id=$1', [id])).rows[0]; return r ? mCampaign(r) : null; },
+    async createCampaign(c) {
+      await q('INSERT INTO campaigns(id,name,channel,segment,subject,body,recipients,sent,failed,tenant_id,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
+        [c.id, c.name, c.channel, c.segment, c.subject ?? '', c.body ?? '', c.recipients ?? 0, c.sent ?? 0, c.failed ?? 0, T(c.tenantId), c.createdAt ?? Date.now()]);
+      return c;
+    },
+    async updateCampaign(id, patch) {
+      const cur = (await q('SELECT * FROM campaigns WHERE id=$1', [id])).rows[0];
+      if (!cur) return null; const n = { ...mCampaign(cur), ...patch };
+      await q('UPDATE campaigns SET recipients=$2,sent=$3,failed=$4 WHERE id=$1', [id, n.recipients ?? 0, n.sent ?? 0, n.failed ?? 0]);
       return n;
     },
   };
