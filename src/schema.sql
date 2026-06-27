@@ -106,6 +106,9 @@ CREATE TABLE IF NOT EXISTS customers (
   id          TEXT PRIMARY KEY,
   name        TEXT,
   phone       TEXT,
+  email       TEXT,
+  notes       TEXT,
+  marketing_opt_in BOOLEAN DEFAULT TRUE,
   points      INTEGER DEFAULT 0,
   visits      INTEGER DEFAULT 0,
   total_spent NUMERIC(12,2) DEFAULT 0,
@@ -150,6 +153,35 @@ CREATE TABLE IF NOT EXISTS shifts (
   wage       NUMERIC(10,2) DEFAULT 0,
   status     TEXT DEFAULT 'open',
   tenant_id  TEXT DEFAULT 'default'
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id          TEXT PRIMARY KEY,
+  channel     TEXT,
+  kind        TEXT,
+  to_addr     TEXT,
+  customer_id TEXT,
+  campaign_id TEXT,
+  subject     TEXT,
+  body        TEXT,
+  status      TEXT DEFAULT 'sent',
+  error       TEXT,
+  tenant_id   TEXT DEFAULT 'default',
+  created_at  BIGINT
+);
+
+CREATE TABLE IF NOT EXISTS campaigns (
+  id          TEXT PRIMARY KEY,
+  name        TEXT,
+  channel     TEXT,
+  segment     TEXT,
+  subject     TEXT,
+  body        TEXT,
+  recipients  INTEGER DEFAULT 0,
+  sent        INTEGER DEFAULT 0,
+  failed      INTEGER DEFAULT 0,
+  tenant_id   TEXT DEFAULT 'default',
+  created_at  BIGINT
 );
 
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);

@@ -19,7 +19,9 @@ const DEFAULTS = {
   customers: [],   // {id, name, phone, points, visits, totalSpent, tenantId, createdAt}  — loyalty members
   giftcards: [],   // {id, code, balance, initialBalance, active, tenantId, createdAt}  — gift cards
   drawers: [],     // {id, openedBy, openedAt, startingFloat, paidIn, paidOut, status, ...}  — cash drawer sessions
-  shifts: []       // {id, userId, name, role, clockIn, clockOut, breakMins, wage, status, tenantId}  — time clock
+  shifts: [],      // {id, userId, name, role, clockIn, clockOut, breakMins, wage, status, tenantId}  — time clock
+  messages: [],    // {id, channel, kind, to, customerId, campaignId, subject, body, status, tenantId, createdAt}  — digital receipts + marketing
+  campaigns: []    // {id, name, channel, segment, subject, body, recipients, sent, failed, tenantId, createdAt}  — marketing campaigns
 };
 
 function ensureFile() {

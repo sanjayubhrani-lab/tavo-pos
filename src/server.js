@@ -10,6 +10,7 @@ import { createPaymentIntent, retrieveStatus, createRefund, usingStripe, stripeC
 import { verifyPin, hashPin, issueToken, requireAuth, requireRole, ROLE_ROUTES } from './auth.js';
 import { normalizeIncoming, exportMenu } from './integrations.js';
 import { answer as askTavo, suggestions as askSuggestions } from './ask.js';
+import { deliver, messagingMode, validateRecipient } from './messaging.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -778,18 +779,37 @@ app.get('/api/customers/lookup', requireAuth, h(async (req, res) => {
 }));
 
 app.post('/api/customers', requireAuth, h(async (req, res) => {
-  const { name, phone } = req.body;
+  const { name, phone, email, notes, marketingOptIn } = req.body;
   if (!phone) return res.status(400).json({ error: 'phone required' });
   const existing = await store.findCustomerByPhone(phone, tid(req));
   if (existing) return res.json(existing);   // idempotent — return the existing member
-  const c = { id: nanoid(10), name: (name || 'Guest').toString().slice(0, 60), phone: String(phone), points: 0, visits: 0, totalSpent: 0, tenantId: tid(req), createdAt: Date.now() };
+  const c = {
+    id: nanoid(10), name: (name || 'Guest').toString().slice(0, 60), phone: String(phone),
+    email: email ? String(email).slice(0, 120) : null, notes: notes ? String(notes).slice(0, 500) : '',
+    marketingOptIn: marketingOptIn !== false, points: 0, visits: 0, totalSpent: 0,
+    tenantId: tid(req), createdAt: Date.now(),
+  };
   await store.createCustomer(c);
   res.status(201).json(c);
 }));
 
+// Full customer profile: contact, lifetime stats, and recent order/payment history.
+app.get('/api/customers/:id', requireAuth, h(async (req, res) => {
+  const c = await store.getCustomer(req.params.id);
+  if (!c || (c.tenantId || DEFAULT_TENANT) !== tid(req)) return res.status(404).json({ error: 'not found' });
+  const pays = (await store.listPayments(tid(req))).filter(p => p.customerId === c.id || p.customer === c.id);
+  const history = pays.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 25)
+    .map(p => ({ id: p.id, total: p.total, method: p.method, status: p.status, createdAt: p.createdAt }));
+  const lifetime = pays.filter(p => p.status !== 'voided').reduce((s, p) => s + ((p.total || 0) - (p.refundedAmount || 0)), 0);
+  res.json({ ...c, history, lifetimeSpend: Math.round(lifetime * 100) / 100, orderCount: history.length });
+}));
+
 app.put('/api/customers/:id', requireAuth, h(async (req, res) => {
+  const c = await store.getCustomer(req.params.id);
+  if (!c || (c.tenantId || DEFAULT_TENANT) !== tid(req)) return res.status(404).json({ error: 'not found' });
   const patch = {};
-  for (const k of ['name', 'phone']) if (req.body[k] != null) patch[k] = String(req.body[k]);
+  for (const k of ['name', 'phone', 'email', 'notes']) if (req.body[k] != null) patch[k] = String(req.body[k]).slice(0, 500);
+  if (req.body.marketingOptIn != null) patch.marketingOptIn = req.body.marketingOptIn !== false;
   const out = await store.updateCustomer(req.params.id, patch);
   out ? res.json(out) : res.status(404).json({ error: 'not found' });
 }));
@@ -802,6 +822,108 @@ app.post('/api/customers/:id/points', requireAuth, requireRole('manager'), h(asy
   const points = Math.max(0, (c.points || 0) + delta);
   res.json(await store.updateCustomer(c.id, { points }));
 }));
+
+// ============================================================================
+//  CRM messaging — digital receipts + email/SMS marketing campaigns
+// ============================================================================
+
+// Channel/provider status (simulated vs live) for the UI to show.
+app.get('/api/messaging/status', requireAuth, (req, res) => res.json(messagingMode()));
+
+// Render a plain-text receipt for a payment.
+function receiptText(p, businessName) {
+  const L = [];
+  L.push(businessName || 'Tavo');
+  L.push('Receipt #' + p.id);
+  L.push(new Date(p.createdAt || Date.now()).toLocaleString());
+  L.push('—'.repeat(24));
+  (p.lines || []).forEach(l => L.push(`${l.qty || 1}x ${l.name}  ${money(((l.price || 0) * (l.qty || 1)))}`));
+  L.push('—'.repeat(24));
+  if (p.discount) L.push('Discount  -' + money(p.discount));
+  if (p.serviceCharge) L.push('Service   ' + money(p.serviceCharge));
+  L.push('Subtotal  ' + money(p.subtotal || 0));
+  L.push('Tax       ' + money(p.tax || 0));
+  if (p.tip) L.push('Tip       ' + money(p.tip));
+  L.push('Total     ' + money(p.total || 0));
+  L.push('');
+  L.push('Thank you!');
+  return L.join('\n');
+}
+function money(n) { return '$' + (Math.round((Number(n) || 0) * 100) / 100).toFixed(2); }
+
+// Send a digital receipt for a payment over email or SMS.
+app.post('/api/receipts/send', requireAuth, h(async (req, res) => {
+  const { paymentId, channel = 'email', to } = req.body;
+  if (!['email', 'sms'].includes(channel)) return res.status(400).json({ error: 'channel must be email or sms' });
+  const pay = await store.getPayment(paymentId);
+  if (!pay || (pay.tenantId || DEFAULT_TENANT) !== tid(req)) return res.status(404).json({ error: 'payment not found' });
+  // Resolve recipient: explicit `to`, else the attached customer's contact.
+  let dest = to, customerId = pay.customerId || null;
+  if (!dest && customerId) { const c = await store.getCustomer(customerId); dest = c ? (channel === 'email' ? c.email : c.phone) : null; }
+  const bad = validateRecipient(channel, dest);
+  if (bad) return res.status(400).json({ error: bad });
+  const t = await store.getTenant(tid(req));
+  const subject = `Your receipt from ${(t && t.name) || 'Tavo'}`;
+  const body = receiptText(pay, t && t.name);
+  const r = await deliver({ channel, to: dest, subject, body });
+  const msg = { id: nanoid(10), channel, kind: 'receipt', to: dest, customerId, campaignId: null, subject, body, status: r.status, error: r.error || null, tenantId: tid(req), createdAt: Date.now() };
+  await store.createMessage(msg);
+  r.ok ? res.status(201).json(msg) : res.status(502).json({ error: r.error || 'send failed', message: msg });
+}));
+
+// Resolve a marketing segment to an opted-in, contactable recipient list.
+function resolveSegment(customers, segment, channel) {
+  const now = Date.now(), DAY = 86400000;
+  const contact = c => channel === 'email' ? c.email : c.phone;
+  return customers.filter(c => {
+    if (c.marketingOptIn === false) return false;
+    if (validateRecipient(channel, contact(c))) return false;   // must have a valid address
+    if (segment === 'loyalty') return (c.points || 0) > 0;
+    if (segment === 'vip') return (c.totalSpent || 0) >= 100;
+    if (segment === 'new') return (now - (c.createdAt || 0)) <= 30 * DAY;
+    return true;   // 'all'
+  });
+}
+
+// Preview how many recipients a segment/channel would reach.
+app.get('/api/marketing/segments', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const customers = await store.listCustomers(tid(req));
+  const out = {};
+  for (const ch of ['email', 'sms']) {
+    out[ch] = {};
+    for (const seg of ['all', 'loyalty', 'vip', 'new']) out[ch][seg] = resolveSegment(customers, seg, ch).length;
+  }
+  res.json({ totalCustomers: customers.length, reach: out });
+}));
+
+// Launch a marketing campaign: resolve the segment, deliver each message, log it all.
+app.post('/api/marketing/campaign', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const { name = 'Campaign', channel = 'email', segment = 'all', subject = '', body = '' } = req.body;
+  if (!['email', 'sms'].includes(channel)) return res.status(400).json({ error: 'channel must be email or sms' });
+  if (!String(body).trim()) return res.status(400).json({ error: 'message body required' });
+  if (channel === 'email' && !String(subject).trim()) return res.status(400).json({ error: 'subject required for email' });
+  const customers = await store.listCustomers(tid(req));
+  const recipients = resolveSegment(customers, segment, channel);
+  if (recipients.length === 0) return res.status(400).json({ error: 'no opted-in recipients match that segment/channel' });
+
+  const campaign = { id: nanoid(10), name: String(name).slice(0, 80), channel, segment, subject: String(subject).slice(0, 160), body: String(body).slice(0, 1000), recipients: recipients.length, sent: 0, failed: 0, tenantId: tid(req), createdAt: Date.now() };
+  await store.createCampaign(campaign);
+
+  let sent = 0, failed = 0;
+  for (const c of recipients) {
+    const dest = channel === 'email' ? c.email : c.phone;
+    const r = await deliver({ channel, to: dest, subject: campaign.subject, body: campaign.body });
+    await store.createMessage({ id: nanoid(10), channel, kind: 'marketing', to: dest, customerId: c.id, campaignId: campaign.id, subject: campaign.subject, body: campaign.body, status: r.status, error: r.error || null, tenantId: tid(req), createdAt: Date.now() });
+    r.ok ? sent++ : failed++;
+  }
+  const out = await store.updateCampaign(campaign.id, { sent, failed });
+  res.status(201).json(out || { ...campaign, sent, failed });
+}));
+
+app.get('/api/marketing/campaigns', requireAuth, requireRole('manager'), h(async (req, res) => res.json(await store.listCampaigns(tid(req)))));
+
+// The message log (receipts + marketing sends), newest first.
+app.get('/api/messages', requireAuth, requireRole('manager'), h(async (req, res) => res.json((await store.listMessages(tid(req))).slice(0, 200))));
 
 // ---- gift cards ----
 function genGiftCode() {
