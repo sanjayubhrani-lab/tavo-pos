@@ -19,6 +19,8 @@ const mMenu = r => ({ id: r.id, category: r.category, name: r.name, price: num(r
 const mInv = r => ({ id: r.id, name: r.name, unit: r.unit ?? 'unit', qty: num(r.qty) || 0, parLevel: num(r.par_level) || 0, cost: num(r.cost) || 0, tenantId: r.tenant_id ?? DEFAULT_TENANT });
 const mCust = r => ({ id: r.id, name: r.name, phone: r.phone, points: num(r.points) || 0, visits: num(r.visits) || 0, totalSpent: num(r.total_spent) || 0, tenantId: r.tenant_id ?? DEFAULT_TENANT, createdAt: num(r.created_at) });
 const mGift = r => ({ id: r.id, code: r.code, balance: num(r.balance) || 0, initialBalance: num(r.initial_balance) || 0, active: r.active, tenantId: r.tenant_id ?? DEFAULT_TENANT, createdAt: num(r.created_at) });
+const mShift = r => ({ id: r.id, userId: r.user_id, name: r.name, role: r.role, clockIn: num(r.clock_in), clockOut: r.clock_out == null ? null : num(r.clock_out),
+  breakMins: num(r.break_mins) || 0, wage: num(r.wage) || 0, status: r.status, tenantId: r.tenant_id ?? DEFAULT_TENANT });
 const mDrawer = r => ({ id: r.id, openedBy: r.opened_by, openedAt: num(r.opened_at), startingFloat: num(r.starting_float) || 0,
   paidIn: num(r.paid_in) || 0, paidOut: num(r.paid_out) || 0, closedBy: r.closed_by ?? null, closedAt: r.closed_at == null ? null : num(r.closed_at),
   expected: r.expected == null ? null : num(r.expected), counted: r.counted == null ? null : num(r.counted), variance: r.variance == null ? null : num(r.variance),
@@ -114,6 +116,9 @@ export async function makePgStore(poolOverride) {
            paid_in NUMERIC(10,2) DEFAULT 0, paid_out NUMERIC(10,2) DEFAULT 0, closed_by TEXT, closed_at BIGINT,
            expected NUMERIC(10,2), counted NUMERIC(10,2), variance NUMERIC(10,2),
            status TEXT DEFAULT 'open', tenant_id TEXT DEFAULT 'default')`,
+        `CREATE TABLE IF NOT EXISTS shifts (
+           id TEXT PRIMARY KEY, user_id TEXT, name TEXT, role TEXT, clock_in BIGINT, clock_out BIGINT,
+           break_mins INTEGER DEFAULT 0, wage NUMERIC(10,2) DEFAULT 0, status TEXT DEFAULT 'open', tenant_id TEXT DEFAULT 'default')`,
         // retail mode: business type + product SKU/barcode/stock
         "ALTER TABLE tenants ADD COLUMN mode TEXT DEFAULT 'restaurant'",
         "ALTER TABLE tenants ADD COLUMN settings JSONB DEFAULT '{}'",
@@ -150,7 +155,7 @@ export async function makePgStore(poolOverride) {
     async seedTenant(data) { await insertSeed(q, data); },
 
     async reset({ menu = [], tables = [], staff = [], users = [], inventory = [], tenants } = {}) {
-      for (const t of ['menu', 'tables', 'orders', 'payments', 'users', 'staff', 'inventory', 'customers', 'giftcards', 'drawers', 'tenants'])
+      for (const t of ['menu', 'tables', 'orders', 'payments', 'users', 'staff', 'inventory', 'customers', 'giftcards', 'drawers', 'shifts', 'tenants'])
         await q(`DELETE FROM ${t}`);
       const tlist = tenants || [{ id: DEFAULT_TENANT, name: 'Default', slug: DEFAULT_TENANT, plan: 'free', mode: 'restaurant', createdAt: Date.now() }];
       for (const t of tlist)
@@ -320,6 +325,23 @@ export async function makePgStore(poolOverride) {
       if (!cur) return null; const n = { ...mDrawer(cur), ...patch };
       await q('UPDATE drawers SET paid_in=$2,paid_out=$3,closed_by=$4,closed_at=$5,expected=$6,counted=$7,variance=$8,status=$9 WHERE id=$1',
         [id, n.paidIn ?? 0, n.paidOut ?? 0, n.closedBy ?? null, n.closedAt ?? null, n.expected ?? null, n.counted ?? null, n.variance ?? null, n.status]);
+      return n;
+    },
+
+    // shifts / time clock (tenant-scoped)
+    async listShifts(tenantId) { return (await q('SELECT * FROM shifts WHERE tenant_id=$1 ORDER BY clock_in DESC', [T(tenantId)])).rows.map(mShift); },
+    async getShift(id) { const r = (await q('SELECT * FROM shifts WHERE id=$1', [id])).rows[0]; return r ? mShift(r) : null; },
+    async getOpenShiftFor(userId, tenantId) { const r = (await q("SELECT * FROM shifts WHERE tenant_id=$1 AND user_id=$2 AND status='open' ORDER BY clock_in DESC LIMIT 1", [T(tenantId), userId])).rows[0]; return r ? mShift(r) : null; },
+    async createShift(s) {
+      await q('INSERT INTO shifts(id,user_id,name,role,clock_in,clock_out,break_mins,wage,status,tenant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+        [s.id, s.userId, s.name, s.role, s.clockIn, s.clockOut ?? null, s.breakMins ?? 0, s.wage ?? 0, s.status ?? 'open', T(s.tenantId)]);
+      return s;
+    },
+    async updateShift(id, patch) {
+      const cur = (await q('SELECT * FROM shifts WHERE id=$1', [id])).rows[0];
+      if (!cur) return null; const n = { ...mShift(cur), ...patch };
+      await q('UPDATE shifts SET clock_out=$2,break_mins=$3,wage=$4,status=$5 WHERE id=$1',
+        [id, n.clockOut ?? null, n.breakMins ?? 0, n.wage ?? 0, n.status]);
       return n;
     },
   };

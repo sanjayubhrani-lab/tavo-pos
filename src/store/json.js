@@ -17,7 +17,7 @@ export function makeJsonStore() {
     async reset({ menu = [], tables = [], staff = [], users = [], inventory = [], tenants } = {}) {
       const db = read();
       db.menu = menu; db.tables = tables; db.staff = staff; db.users = users; db.inventory = inventory;
-      db.orders = []; db.payments = []; db.customers = []; db.giftcards = []; db.drawers = [];
+      db.orders = []; db.payments = []; db.customers = []; db.giftcards = []; db.drawers = []; db.shifts = [];
       db.tenants = tenants || [{ id: DEFAULT_TENANT, name: 'Default', slug: DEFAULT_TENANT, plan: 'free', createdAt: Date.now() }];
       write(db);
     },
@@ -113,5 +113,12 @@ export function makeJsonStore() {
     async listDrawers(tenantId) { return (read().drawers || []).filter(d => owns(d, tenantId)).sort((a, b) => (b.openedAt || 0) - (a.openedAt || 0)); },
     async createDrawer(d) { const db = read(); (db.drawers ||= []).push(d); write(db); return d; },
     async updateDrawer(id, patch) { const db = read(); const d = (db.drawers ||= []).find(x => x.id === id); if (!d) return null; Object.assign(d, patch); write(db); return d; },
+
+    // ---- shifts / time clock (scoped) ----
+    async listShifts(tenantId) { return (read().shifts || []).filter(s => owns(s, tenantId)).sort((a, b) => (b.clockIn || 0) - (a.clockIn || 0)); },
+    async getShift(id) { return (read().shifts || []).find(s => s.id === id) || null; },
+    async getOpenShiftFor(userId, tenantId) { return (read().shifts || []).find(s => owns(s, tenantId) && s.userId === userId && s.status === 'open') || null; },
+    async createShift(s) { const db = read(); (db.shifts ||= []).push(s); write(db); return s; },
+    async updateShift(id, patch) { const db = read(); const s = (db.shifts ||= []).find(x => x.id === id); if (!s) return null; Object.assign(s, patch); write(db); return s; },
   };
 }
