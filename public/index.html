@@ -97,6 +97,36 @@
     #printArea .c{text-align:center}
     @page{margin:6mm}
   }
+  /* ---- micro-interactions (sleek, fast, GPU-friendly) ---- */
+  @keyframes itemPop{from{opacity:0;transform:translateY(10px) scale(.97)}to{opacity:1;transform:none}}
+  @keyframes lineIn{from{opacity:0;transform:translateX(10px)}to{opacity:1;transform:none}}
+  @keyframes modalIn{from{opacity:0;transform:translateY(24px) scale(.97)}to{opacity:1;transform:none}}
+  @keyframes fadeBg{from{opacity:0}to{opacity:1}}
+  @keyframes viewIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  .items .item{animation:itemPop .3s cubic-bezier(.2,.8,.2,1) backwards}
+  .items .item:nth-child(2){animation-delay:.03s}.items .item:nth-child(3){animation-delay:.06s}
+  .items .item:nth-child(4){animation-delay:.09s}.items .item:nth-child(5){animation-delay:.12s}
+  .items .item:nth-child(6){animation-delay:.15s}.items .item:nth-child(7){animation-delay:.18s}
+  .items .item:nth-child(n+8){animation-delay:.2s}
+  .item:active{transform:scale(.96)}
+  .item:hover{border-color:var(--brand);box-shadow:0 10px 26px -16px rgba(124,140,255,.7);transform:translateY(-2px)}
+  .lines .line{animation:lineIn .25s ease backwards}
+  .btn{transition:transform .12s,box-shadow .2s,filter .2s}
+  .btn:active{transform:translateY(1px) scale(.985)}
+  .btn.primary:hover,.btn.green:hover{filter:brightness(1.07);box-shadow:0 10px 26px -10px rgba(124,92,255,.7)}
+  .chip{transition:transform .12s,background .15s,border-color .15s}.chip:active{transform:scale(.93)}
+  .cat,.tipbtn,.pm,.tbl{transition:transform .14s,border-color .15s,background .15s,box-shadow .2s}
+  .cat:active,.tipbtn:active,.pm:active{transform:scale(.97)}
+  .tbl:hover{transform:translateY(-3px);box-shadow:0 12px 28px -18px rgba(124,140,255,.7)}
+  .nav .navitem,.nav a{transition:background .15s,color .15s,transform .12s}
+  .overlay.show{animation:fadeBg .22s ease}
+  .overlay.show .modal{animation:modalIn .3s cubic-bezier(.2,.8,.2,1)}
+  #view>*{animation:viewIn .3s ease}
+  .tipbtn.sel,.pm.sel{transition:transform .14s,border-color .2s,background .2s;box-shadow:0 0 0 3px rgba(124,140,255,.12)}
+  @media(prefers-reduced-motion:reduce){
+    *,*::before,*::after{animation:none!important}
+    .item:hover,.tbl:hover,.btn:active{transform:none!important}
+  }
 </style>
 </head>
 <body>
