@@ -297,6 +297,8 @@ async function render(){
 }
 
 /* ---- POS ---- */
+let activeSeat=null;   // Toast-style: the seat new items are tagged to (null = shared)
+function setActiveSeat(n){ activeSeat=(activeSeat===n?null:n); render(); toast(activeSeat?('Now ordering for Seat '+activeSeat):'Now ordering shared items'); }
 function posView(){
   const searching = posSearch.trim().length>0;
   const q = posSearch.trim().toLowerCase();
@@ -335,7 +337,7 @@ async function scanAdd(){
 }
 function checkPanel(){
   const t=totals(check);
-  const seatCourseChip=l=>{const bits=[];if(l.seat)bits.push('👤'+l.seat);if(l.course)bits.push('🍽'+l.course);return bits.length?bits.join(' '):'+ seat/course';};
+  const seatCourseChip=l=>{const bits=[];if(l.seat)bits.push('👤 Seat '+l.seat);if(l.course)bits.push('🍽 Course '+l.course);return bits.length?bits.join(' · '):'Assign seat / course';};
   const lines=check.length?check.map((l,i)=>`<div class="line"><div class="qty">${l.qty}</div>
     <div class="info"><div class="ln-nm">${l.name}</div>${(l.mods&&l.mods.length)?`<div class="ln-mod">${l.mods.join(", ")}</div>`:""}
     <div style="margin-top:5px;display:flex;gap:6px;flex-wrap:wrap">
@@ -352,9 +354,15 @@ function checkPanel(){
         <span style="font-size:13px">💳 <b>${checkCustomer.name||'Member'}</b> · ${checkCustomer.points} pts</span>
         <button class="chip" style="margin-left:auto;padding:3px 8px" onclick="detachCustomer()">✕</button></div>`
     : `<div style="padding:8px 12px;border-bottom:1px solid var(--line)"><button class="chip" style="width:100%" onclick="attachCustomer()">＋ Add loyalty member</button></div>`;
+  // Toast-style seat picker: choose a seat, then items you add are tagged to that guest.
+  const seatBar = isRetail()?'':`<div style="display:flex;gap:6px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line);overflow-x:auto">
+      <span style="font-size:11px;color:var(--mut);white-space:nowrap">Ordering for</span>
+      <button class="chip ${!activeSeat?'sel':''}" style="padding:3px 9px;white-space:nowrap" onclick="setActiveSeat(null)">🍽 Shared</button>
+      ${[1,2,3,4,5,6].map(n=>`<button class="chip ${activeSeat===n?'sel':''}" style="padding:3px 9px;white-space:nowrap" onclick="setActiveSeat(${n})">👤 ${n}</button>`).join('')}</div>`;
   return `<div class="check"><div class="hd"><h3>${tableNo?('Table '+tableNo):(isRetail()?'New Sale':'New Check')}</h3>
     ${isRetail()?'':`<button class="chip" onclick="assignTable()">${tableNo?'Change':'🍽️ Table'}</button>`}</div>
     ${custRow}
+    ${seatBar}
     <div class="lines">${lines}</div>
     <div class="totals"><div class="totrow"><span>Subtotal</span><span>${money(t.sub)}</span></div>
       <div class="totrow"><span>Tax</span><span>${money(t.tax)}</span></div>
@@ -390,15 +398,15 @@ function splitBySeat(){
       <div style="display:flex;justify-content:space-between;font-weight:700;border-top:1px solid var(--line);margin-top:6px;padding-top:6px"><span>Seat total (incl. tax)</span><span>${money(t.total)}</span></div></div>`;
   }).join('');
   openModal(`<div class="mhd"><h3>👥 Split by seat</h3><button class="x" onclick="closeModal()">✕</button></div><div class="mbd">
-    <p style="font-size:12px;color:var(--mut);margin:0 0 12px">Collect each seat separately, then take payment. Assign seats to items using the seat chip on each line.</p>
+    <p style="font-size:12px;color:var(--mut);margin:0 0 12px">Each guest's items are grouped below. Tip: pick a seat in the “Ordering for” bar before adding items, or tap a line's seat chip to reassign. Collect each seat separately, then take payment.</p>
     ${sec}</div>`);
 }
 function setCat(c){activeCat=c;render()}
 function addItem(id){const it=MENU.find(m=>m.id===id);
   if(it.weighted){ weighItem(it); return; }
   if(it.modifierGroups&&it.modifierGroups.length){ openModifierPicker(it,null); return; }
-  const ex=check.find(l=>l.id===id&&(!l.mods||!l.mods.length));
-  if(ex)ex.qty++;else check.push({id,name:it.name,price:it.price,qty:1,mods:[],taxRate:it.taxRate??null});render()}
+  const ex=check.find(l=>l.id===id&&(!l.mods||!l.mods.length)&&(l.seat||null)===(activeSeat||null));
+  if(ex)ex.qty++;else check.push({id,name:it.name,price:it.price,qty:1,mods:[],taxRate:it.taxRate??null,seat:activeSeat||null});render()}
 // Weighed sale: enter weight, line qty = weight so total = price-per-unit × weight.
 function weighItem(it){
   const u=it.weightUnit||'lb';
@@ -414,12 +422,12 @@ function weighItem(it){
 function addWeighed(id){
   const it=MENU.find(m=>m.id===id); const w=Number(document.getElementById('wi-w').value);
   if(!(w>0)){ toast('Enter a weight'); return; }
-  check.push({id,name:it.name+' ('+w+(it.weightUnit||'lb')+')',price:it.price,qty:w,mods:[],taxRate:it.taxRate??null,weighed:true});
+  check.push({id,name:it.name+' ('+w+(it.weightUnit||'lb')+')',price:it.price,qty:w,mods:[],taxRate:it.taxRate??null,weighed:true,seat:activeSeat||null});
   closeModal(); render();
 }
 function chgQty(i,d){check[i].qty+=d;if(check[i].qty<=0)check.splice(i,1);render()}
 function rmLine(i){check.splice(i,1);render()}
-function clearCheck(){check=[];tableNo=null;checkCustomer=null;render()}
+function clearCheck(){check=[];tableNo=null;checkCustomer=null;activeSeat=null;render()}
 function editMods(i){const it=MENU.find(m=>m.id===check[i].id);
   if(it&&it.modifierGroups&&it.modifierGroups.length){ openModifierPicker(it,i); return; }
   const sel=new Set(check[i].mods||[]);
@@ -463,7 +471,7 @@ function commitMods(){
     if(g.min && n<g.min){ toast('Choose at least '+g.min+' for '+g.name); return; } }
   const mods=[]; _mp.it.modifierGroups.forEach(g=>g.options.forEach(o=>{ if(_mp.sel[g.id].has(o.name)) mods.push(o.price?`${o.name} (+$${o.price.toFixed(2)})`:o.name); }));
   if(_mp.lineIndex!=null && check[_mp.lineIndex]) check[_mp.lineIndex].mods=mods;
-  else check.push({id:_mp.it.id,name:_mp.it.name,price:_mp.it.price,qty:1,mods,taxRate:_mp.it.taxRate??null});
+  else check.push({id:_mp.it.id,name:_mp.it.name,price:_mp.it.price,qty:1,mods,taxRate:_mp.it.taxRate??null,seat:activeSeat||null});
   _mp=null; closeModal(); render();
 }
 function assignTable(){let o="";for(let n=1;n<=12;n++)o+=`<button class="chip ${tableNo===n?'sel':''}" onclick="setTable(${n})">T${n}</button>`;
@@ -533,7 +541,7 @@ async function sendToKitchen(){
       if(courses.length){ await api('/orders/'+order.id+'/fire-course',{method:'POST',body:JSON.stringify({course:courses[0]})}); }
       else { await api('/orders/'+order.id+'/fire',{method:'POST'}); }
       if(autoTicket()) doPrint(ticketInner(order));
-      check=[];tableNo=null;checkCustomer=null;render();
+      check=[];tableNo=null;checkCustomer=null;activeSeat=null;render();
       toast(courses.length?('✅ Order #'+order.number+' sent · course '+courses[0]+' fired'):('✅ Order #'+order.number+' sent to kitchen'));return;
     }catch(e){ if(!e.offline){ toast('⚠️ '+e.message); return; } /* offline → fall through to queue */ }
   }
@@ -546,7 +554,7 @@ function queueOrder(payload){
   const ticket={tempId,number,table:payload.table,lines:payload.lines,firedAt:Date.now(),status:'cooking',pending:true};
   PENDING.push(ticket); savePending();
   if(autoTicket()) doPrint(ticketInner(ticket));
-  check=[];tableNo=null;checkCustomer=null;render();toast('📴 Order '+number+' queued — will sync when online');
+  check=[];tableNo=null;checkCustomer=null;activeSeat=null;render();toast('📴 Order '+number+' queued — will sync when online');
 }
 
 /* ---- PAYMENT (Stripe test mode or mock) ---- */
@@ -727,7 +735,7 @@ async function submitSplit(){
       tenders:_split.tenders.map(t=>({method:t.method,amount:t.amount})),
       customerId:pay.customer?pay.customer.id:null, pointsRedeemed:pay.pointsRedeemed||0})});
     try{ await loadMenu(); }catch(e){}
-    check=[];tableNo=null;checkCustomer=null;_split=null;
+    check=[];tableNo=null;checkCustomer=null;activeSeat=null;_split=null;
     showReceipt(r.total);renderNav();
     toast('✅ Split across '+r.tenders+' tenders · '+money(r.total));
   }catch(e){ toast('⚠️ '+e.message); }
@@ -767,7 +775,7 @@ function queuePayment(grand){
     lines:pay.lines.map(l=>({name:l.name,price:l.price,qty:l.qty,mods:l.mods}))}});
   saveOutbox();
   if(pay.table){ PENDING=PENDING.filter(p=>p.table!==pay.table); savePending(); }  // table settled locally
-  check=[];tableNo=null;checkCustomer=null;showReceipt(grand);renderNav();
+  check=[];tableNo=null;checkCustomer=null;activeSeat=null;showReceipt(grand);renderNav();
   toast('📴 '+pay.method+' payment queued — will sync when online');
 }
 async function stripeCardFlow(intent){
@@ -805,7 +813,7 @@ async function completePayment(intentId,grand){
     _lastPayId=(r&&r.id)||null;
     _lastPayCustomer=pay.customer?{email:pay.customer.email||'',phone:pay.customer.phone||''}:null;
     try{ await loadMenu(); }catch(e){}   // refresh retail stock counts after a sale
-    check=[];tableNo=null;checkCustomer=null;showReceipt(grand);renderNav();
+    check=[];tableNo=null;checkCustomer=null;activeSeat=null;showReceipt(grand);renderNav();
   }catch(e){toast('⚠️ '+e.message)}
 }
 let _lastReceipt=null;   // {pay, calc, grand, when} for print/email
@@ -1078,7 +1086,7 @@ async function pollCustomerCheckout(){
 }
 function finishCustomerCheckout(){
   clearInterval(_ccTimer); _ccTimer=null; const done=!!_ccPayId; _cc=null;
-  check=[];tableNo=null;checkCustomer=null; closeModal(); render();
+  check=[];tableNo=null;checkCustomer=null;activeSeat=null; closeModal(); render();
   if(done) toast('💰 Paid on customer screen');
 }
 async function cancelCustomerCheckout(){
