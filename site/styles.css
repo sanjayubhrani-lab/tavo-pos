@@ -121,3 +121,92 @@ h2{font-size:clamp(26px,4vw,38px);margin:10px 0 12px;letter-spacing:-.01em}
 footer.site{border-top:1px solid var(--line);padding:34px 0;color:var(--mut);font-size:14px}
 footer.site .fcols{display:flex;justify-content:space-between;flex-wrap:wrap;gap:20px;align-items:center}
 footer.site a:hover{color:var(--txt)}
+
+/* ============================================================
+   SLEEK MOTION LAYER — animated gradients, glow, scroll reveals
+   ============================================================ */
+
+/* drifting glow blobs behind everything (premium SaaS backdrop) */
+body::before,body::after{content:"";position:fixed;z-index:-2;border-radius:50%;
+  filter:blur(90px);opacity:.5;pointer-events:none;will-change:transform}
+body::before{width:46vw;height:46vw;top:-10vw;left:-8vw;
+  background:radial-gradient(circle at 30% 30%,#4f46e5,transparent 70%);
+  animation:drift1 22s ease-in-out infinite}
+body::after{width:42vw;height:42vw;top:30vh;right:-12vw;
+  background:radial-gradient(circle at 70% 70%,#a855f7,transparent 70%);
+  animation:drift2 26s ease-in-out infinite}
+@keyframes drift1{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(8vw,6vh) scale(1.15)}}
+@keyframes drift2{0%,100%{transform:translate(0,0) scale(1.05)}50%{transform:translate(-7vw,-5vh) scale(.9)}}
+
+/* animated gradient text */
+.grad{background:linear-gradient(110deg,#818cf8,#c084fc,#67e8f9,#818cf8);
+  background-size:300% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;
+  animation:hue 8s ease infinite}
+@keyframes hue{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
+
+/* glassy sticky nav with animated underline accent */
+header.site{background:rgba(15,17,21,.55);backdrop-filter:blur(16px) saturate(160%);
+  -webkit-backdrop-filter:blur(16px) saturate(160%)}
+.navlinks a.lnk{position:relative}
+.navlinks a.lnk::after{content:"";position:absolute;left:0;bottom:-6px;height:2px;width:0;border-radius:2px;
+  background:var(--grad);transition:width .3s ease}
+.navlinks a.lnk:hover::after,.navlinks a.lnk.active::after{width:100%}
+.logo{transition:transform .4s cubic-bezier(.2,.8,.2,1),box-shadow .4s}
+.brand:hover .logo{transform:rotate(-6deg) scale(1.08);box-shadow:0 8px 26px -6px rgba(124,140,255,.7)}
+
+/* buttons: glow + sheen sweep */
+.btn{position:relative;overflow:hidden;box-shadow:0 6px 20px -8px rgba(124,92,255,.6)}
+.btn::after{content:"";position:absolute;top:0;left:-120%;width:60%;height:100%;
+  background:linear-gradient(100deg,transparent,rgba(255,255,255,.35),transparent);transform:skewX(-20deg)}
+.btn:hover{transform:translateY(-2px);box-shadow:0 12px 34px -8px rgba(124,92,255,.85)}
+.btn:hover::after{animation:sheen .8s ease}
+@keyframes sheen{to{left:140%}}
+.btn.ghost{box-shadow:none}
+.btn.ghost:hover{box-shadow:0 0 0 1px var(--brand),0 8px 26px -10px rgba(124,140,255,.6)}
+
+/* cards: lift, glow, gradient border-glow on hover */
+.card{transition:transform .35s cubic-bezier(.2,.8,.2,1),border-color .35s,box-shadow .35s,background .35s}
+.card:hover{transform:translateY(-6px);border-color:rgba(124,140,255,.55);
+  box-shadow:0 20px 50px -22px rgba(124,140,255,.55);background:var(--panel2)}
+.card .ic{transition:transform .35s ease}
+.card:hover .ic{transform:scale(1.12) rotate(-4deg)}
+.price{transition:transform .35s cubic-bezier(.2,.8,.2,1),box-shadow .35s,border-color .35s}
+.price:hover{transform:translateY(-6px);border-color:rgba(124,140,255,.5);box-shadow:0 24px 60px -24px rgba(124,140,255,.6)}
+.price.feat{animation:floatcard 6s ease-in-out infinite}
+@keyframes floatcard{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+.tile{transition:transform .4s ease,filter .4s}
+.panelimg:hover .tile{transform:scale(1.04)}
+
+/* pill: soft pulsing glow */
+.pill{animation:pulseGlow 3.5s ease-in-out infinite}
+@keyframes pulseGlow{0%,100%{box-shadow:0 0 0 0 rgba(124,140,255,.0)}50%{box-shadow:0 0 22px 2px rgba(124,140,255,.35)}}
+
+/* band CTA: animated gradient sheen border */
+.band{position:relative;overflow:hidden}
+.band::before{content:"";position:absolute;inset:-1px;border-radius:22px;padding:1px;
+  background:linear-gradient(120deg,rgba(124,140,255,.0),rgba(124,140,255,.7),rgba(168,85,247,.0));
+  background-size:200% 100%;-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+  -webkit-mask-composite:xor;mask-composite:exclude;animation:hue 6s linear infinite;pointer-events:none}
+
+/* hero entrance (first paint) */
+.center>.pill,.center>h1,.center>.sub,.center>.cta-row,.center>.micro{
+  opacity:0;animation:fadeUp .8s cubic-bezier(.2,.8,.2,1) forwards}
+.center>h1{animation-delay:.08s}.center>.sub{animation-delay:.16s}
+.center>.cta-row{animation-delay:.24s}.center>.micro{animation-delay:.32s}
+@keyframes fadeUp{from{opacity:0;transform:translateY(22px)}to{opacity:1;transform:none}}
+
+/* scroll-reveal (added by site.js via IntersectionObserver) */
+.reveal{opacity:0;transform:translateY(28px);transition:opacity .7s cubic-bezier(.2,.7,.2,1),transform .7s cubic-bezier(.2,.7,.2,1)}
+.reveal.in{opacity:1;transform:none}
+.grid .reveal:nth-child(2),.prices .reveal:nth-child(2){transition-delay:.08s}
+.grid .reveal:nth-child(3),.prices .reveal:nth-child(3){transition-delay:.16s}
+.grid .reveal:nth-child(4){transition-delay:.24s}
+.grid .reveal:nth-child(5){transition-delay:.32s}
+.grid .reveal:nth-child(6){transition-delay:.40s}
+
+/* accessibility: honour reduced-motion */
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important}
+  .reveal{opacity:1;transform:none}
+  body::before,body::after{display:none}
+}
