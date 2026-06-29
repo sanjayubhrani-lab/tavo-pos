@@ -10,6 +10,7 @@
     "migrate": "node src/migrate.js",
     "seed": "node src/seed.js",
     "test": "node test/store.test.mjs && node test/gateways.test.mjs && node test/api.test.mjs",
+    "mobile:install": "npm i -D @capacitor/cli@^6 @capacitor/assets@^3 && npm i @capacitor/core@^6 @capacitor/ios@^6 @capacitor/android@^6 @capacitor/app@^6 @capacitor/splash-screen@^6 @capacitor/status-bar@^6",
     "mobile:build": "rm -rf www && cp -r public www",
     "mobile:add": "npm run mobile:build && npx cap add ios && npx cap add android",
     "mobile:assets": "npx @capacitor/assets generate --iconBackgroundColor #4f46e5 --splashBackgroundColor #0f1115",
@@ -17,7 +18,7 @@
     "mobile:ios": "npm run mobile:sync && npx cap open ios",
     "mobile:android": "npm run mobile:sync && npx cap open android"
   },
-  "engines": { "node": ">=18" },
+  "engines": { "node": "20.x" },
   "dependencies": {
     "express": "^4.19.2",
     "cors": "^2.8.5",
@@ -26,17 +27,9 @@
     "nanoid": "^5.0.7",
     "bcryptjs": "^2.4.3",
     "jsonwebtoken": "^9.0.2",
-    "pg": "^8.12.0",
-    "@capacitor/core": "^6.1.2",
-    "@capacitor/ios": "^6.1.2",
-    "@capacitor/android": "^6.1.2",
-    "@capacitor/app": "^6.0.1",
-    "@capacitor/splash-screen": "^6.0.2",
-    "@capacitor/status-bar": "^6.0.1"
+    "pg": "^8.12.0"
   },
   "devDependencies": {
-    "pg-mem": "^3.0.2",
-    "@capacitor/cli": "^6.1.2",
-    "@capacitor/assets": "^3.0.5"
+    "pg-mem": "^3.0.2"
   }
 }

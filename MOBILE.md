@@ -29,7 +29,8 @@ are all in place.
 
 ```bash
 cd platepoint
-npm install                 # server + Capacitor deps (already in package.json)
+npm install                 # server deps
+npm run mobile:install      # adds Capacitor deps (kept out of the server deploy to keep builds lean)
 npm run mobile:add          # copies the web app to www/ then runs `cap add ios` + `cap add android`
 ```
 
