@@ -277,5 +277,19 @@ CREATE TABLE IF NOT EXISTS locations (
   created_at BIGINT
 );
 
+CREATE TABLE IF NOT EXISTS discount_presets (
+  id         TEXT PRIMARY KEY,
+  name       TEXT,
+  kind       TEXT DEFAULT 'percent',   -- 'percent' | 'amount'
+  value      NUMERIC(10,2) DEFAULT 0,
+  reason     TEXT,
+  scope      TEXT DEFAULT 'check',
+  schedule   JSONB,                     -- {days:[0-6], start:'HH:MM', end:'HH:MM'} or NULL for always
+  auto_apply BOOLEAN DEFAULT FALSE,     -- auto-apply during its schedule window (happy hour)
+  active     BOOLEAN DEFAULT TRUE,
+  tenant_id  TEXT DEFAULT 'default',
+  created_at BIGINT
+);
+
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_payments_stripe ON payments(stripe_id);

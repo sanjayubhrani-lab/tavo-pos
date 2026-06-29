@@ -28,7 +28,8 @@ const DEFAULTS = {
   reservations: [], // {id, kind, name, phone, partySize, time, quotedWait, status, tableNumber, notes, tenantId, createdAt, seatedAt}
   houseAccounts: [], // {id, name, contact, email, phone, creditLimit, balance, tenantId, createdAt}
   invoices: [],    // {id, accountId, accountName, lines, total, status, dueDate, notes, tenantId, createdAt, paidAt}
-  locations: []    // {id, name, address, slug, tenantId, createdAt}  — multi-site registry
+  locations: [],   // {id, name, address, slug, tenantId, createdAt}  — multi-site registry
+  discountPresets: [] // {id, name, kind:'percent'|'amount', value, reason, scope:'check', schedule:{days:[0-6],start:'HH:MM',end:'HH:MM'}|null, autoApply, active, tenantId, createdAt}  — preset & scheduled (happy-hour) discounts
 };
 
 function ensureFile() {

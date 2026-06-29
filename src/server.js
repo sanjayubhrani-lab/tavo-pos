@@ -146,6 +146,36 @@ function settle(lines, { discount = 0, serviceCharge = 0, tip = 0, taxExempt = f
   return { subtotal: sub, discount: disc, serviceCharge: svc, tax, tip: t, total, taxExempt: !!taxExempt };
 }
 
+// ---- scheduled (happy-hour) discounts ----
+// Is a discount's schedule window active at `now`? Supports overnight windows
+// (e.g. 22:00–02:00) that wrap past midnight. No schedule = not auto-active.
+function discountInWindow(schedule, now = new Date()) {
+  if (!schedule || !Array.isArray(schedule.days) || !schedule.days.length) return false;
+  const day = now.getDay();
+  const cur = now.getHours() * 60 + now.getMinutes();
+  const parse = (s, d) => { const [h, m] = String(s || d).split(':').map(Number); return (h || 0) * 60 + (m || 0); };
+  const start = parse(schedule.start, '00:00');
+  const end = parse(schedule.end, '23:59');
+  if (end > start) return schedule.days.includes(day) && cur >= start && cur < end;
+  // overnight wrap: active late today (after start) or early today carried from yesterday (before end)
+  const prev = (day + 6) % 7;
+  return (schedule.days.includes(day) && cur >= start) || (schedule.days.includes(prev) && cur < end);
+}
+// Dollar amount a preset takes off a given subtotal.
+function discountAmountFor(preset, subtotal) {
+  const v = Number(preset.value) || 0;
+  const amt = preset.kind === 'amount' ? v : (subtotal * v) / 100;
+  return round(Math.min(subtotal, Math.max(0, amt)));
+}
+// Sanitize a schedule object from request input.
+function cleanSchedule(s) {
+  if (!s || typeof s !== 'object') return null;
+  const days = Array.isArray(s.days) ? [...new Set(s.days.map(Number).filter(d => d >= 0 && d <= 6))] : [];
+  if (!days.length) return null;
+  const hhmm = (x, d) => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(x || d)); if (!m) return d; const h = Math.min(23, +m[1]), mi = Math.min(59, +m[2]); return String(h).padStart(2, '0') + ':' + String(mi).padStart(2, '0'); };
+  return { days: days.sort(), start: hhmm(s.start, '16:00'), end: hhmm(s.end, '18:00') };
+}
+
 // Deplete ingredient stock for an order based on each menu item's recipe.
 // recipe = [{ invId, qty }]; consumed = qty × line.qty. Best-effort, never throws.
 async function depleteForOrder(order, tenantId = DEFAULT_TENANT) {
@@ -939,6 +969,67 @@ app.delete('/api/vendors/:id', requireAuth, requireRole('manager'), h(async (req
   const cur = await store.getVendor(req.params.id);
   if (!cur || (cur.tenantId || DEFAULT_TENANT) !== tid(req)) return res.status(404).json({ error: 'not found' });
   await store.deleteVendor(req.params.id);
+  res.status(204).end();
+}));
+
+// ---- discount presets + scheduled (happy-hour) discounts ----
+// Managers define presets; any staff can read the ones active right now so the
+// POS can auto-apply a happy-hour discount during its window.
+app.get('/api/discounts', requireAuth, requireRole('manager'), h(async (req, res) => res.json(await store.listDiscountPresets(tid(req)))));
+
+// Presets active at this moment (auto-apply + scheduled window matches now), highest value first.
+// Optional ?subtotal= returns the computed dollar amount for each.
+app.get('/api/discounts/active', requireAuth, requireRole('manager', 'server'), h(async (req, res) => {
+  const now = new Date();
+  const sub = Number(req.query.subtotal) || 0;
+  const active = (await store.listDiscountPresets(tid(req)))
+    .filter(d => d.active && d.autoApply && discountInWindow(d.schedule, now))
+    .map(d => ({ ...d, amount: sub > 0 ? discountAmountFor(d, sub) : undefined }))
+    .sort((a, b) => (b.amount ?? b.value) - (a.amount ?? a.value));
+  res.json(active);
+}));
+
+app.post('/api/discounts', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const { name, kind = 'percent', value, reason, autoApply = false, active = true, schedule } = req.body;
+  if (!name) return res.status(400).json({ error: 'discount name required' });
+  const k = kind === 'amount' ? 'amount' : 'percent';
+  const v = Math.max(0, Number(value) || 0);
+  if (k === 'percent' && v > 100) return res.status(400).json({ error: 'percent cannot exceed 100' });
+  const sched = cleanSchedule(schedule);
+  const d = {
+    id: nanoid(8), name: String(name).slice(0, 60), kind: k, value: v,
+    reason: reason ? String(reason).slice(0, 60) : (name ? String(name).slice(0, 60) : 'Discount'),
+    scope: 'check', schedule: sched, autoApply: !!autoApply && !!sched, active: !!active,
+    tenantId: tid(req), createdAt: Date.now(),
+  };
+  await store.createDiscountPreset(d);
+  res.status(201).json(d);
+}));
+
+app.put('/api/discounts/:id', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const cur = await store.getDiscountPreset(req.params.id);
+  if (!cur || (cur.tenantId || DEFAULT_TENANT) !== tid(req)) return res.status(404).json({ error: 'not found' });
+  const patch = {};
+  if (req.body.name != null) patch.name = String(req.body.name).slice(0, 60);
+  if (req.body.kind != null) patch.kind = req.body.kind === 'amount' ? 'amount' : 'percent';
+  if (req.body.value != null) patch.value = Math.max(0, Number(req.body.value) || 0);
+  if (req.body.reason != null) patch.reason = String(req.body.reason).slice(0, 60);
+  if (req.body.active != null) patch.active = !!req.body.active;
+  if ('schedule' in req.body) patch.schedule = cleanSchedule(req.body.schedule);
+  if (req.body.autoApply != null) patch.autoApply = !!req.body.autoApply;
+  // autoApply only valid with a schedule
+  const sched = 'schedule' in patch ? patch.schedule : cur.schedule;
+  if (!sched) patch.autoApply = false;
+  const kind = patch.kind || cur.kind;
+  const value = patch.value != null ? patch.value : cur.value;
+  if (kind === 'percent' && value > 100) return res.status(400).json({ error: 'percent cannot exceed 100' });
+  res.json(await store.updateDiscountPreset(req.params.id, patch));
+}));
+
+app.delete('/api/discounts/:id', requireAuth, requireRole('manager'), h(async (req, res) => {
+  const cur = await store.getDiscountPreset(req.params.id);
+  if (!cur || (cur.tenantId || DEFAULT_TENANT) !== tid(req)) return res.status(404).json({ error: 'not found' });
+  await store.deleteDiscountPreset(req.params.id);
   res.status(204).end();
 }));
 
