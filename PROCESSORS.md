@@ -4,7 +4,7 @@ Tavo is **processor-agnostic**. One internal interface, many gateways. Switch wi
 single environment variable; no app code changes.
 
 ```
-PAYMENT_GATEWAY = stripe | fiserv | tsys | mock
+PAYMENT_GATEWAY = stripe | fiserv | tsys | valor | globalpayments | mock
 ```
 
 If unset, Tavo auto-detects Stripe (when `STRIPE_SECRET_KEY` is present) and otherwise
@@ -17,7 +17,9 @@ src/gateways/
 ├─ index.js     # getGateway() — selects the active processor
 ├─ stripe.js    # Stripe (fully working in test + live)
 ├─ fiserv.js    # Fiserv Commerce Hub / CardConnect (scaffold)
-├─ tsys.js      # TSYS / Global Payments (scaffold)
+├─ tsys.js      # TSYS / Global Payments — legacy Genius/TransIT (scaffold)
+├─ valor.js     # Valor PayTech terminal / cloud semi-integration (scaffold)
+├─ globalpayments.js  # Global Payments GP API — unified commerce (scaffold)
 └─ mock.js      # simulated processor (default, no setup)
 ```
 
@@ -64,5 +66,21 @@ Set the relevant env vars (see `.env.example`) in Render → Environment (or `.e
 - **Stripe:** `PAYMENT_GATEWAY=stripe`, `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY` (+ webhook secret).
 - **Fiserv:** `PAYMENT_GATEWAY=fiserv`, `FISERV_API_KEY`, `FISERV_API_SECRET`, `FISERV_MERCHANT_ID`.
 - **TSYS:** `PAYMENT_GATEWAY=tsys`, `TSYS_MERCHANT_ID`, `TSYS_TRANSACTION_KEY`, `TSYS_DEVICE_ID`.
+- **Valor:** `PAYMENT_GATEWAY=valor`, `VALOR_APP_ID`, `VALOR_APP_KEY` (+ terminal EPI). See `VALOR.md`.
+- **Global Payments:** `PAYMENT_GATEWAY=globalpayments` (aliases: `global`, `gp`), `GP_API_APP_ID`, `GP_API_APP_KEY`, `GP_API_ENV` (`sandbox`|`production`), optional `GP_API_ACCOUNT_NAME`.
+
+### Global Payments (GP API)
+
+Global Payments' modern **GP API** ([developer.globalpay.com](https://developer.globalpay.com)) is a
+unified API for both **card-present** (in-person via a Genius terminal) and **card-not-present**
+(e-commerce hosted fields). It uses an OAuth-style flow: your **App ID + App Key** are exchanged
+for a short-lived **bearer access token**, then `/transactions` performs the sale or refund.
+
+Tavo's `globalpayments.js` adapter has that flow wired (token caching, sale, refund, card-present
+vs CNP channel routing) and reads the env vars above. As with the other real processors, going
+live still requires a **Global Payments merchant account, GP API credentials, and PCI/EMV
+certification** — until `GP_API_APP_ID`/`GP_API_APP_KEY` are set it runs in clearly-flagged
+**simulated** mode. To go live: drop in your sandbox credentials first (`GP_API_ENV=sandbox`),
+uncomment the real `fetch` calls in the adapter, certify, then switch to `GP_API_ENV=production`.
 
 The top-bar badge and `GET /api/health` show which processor is active.
