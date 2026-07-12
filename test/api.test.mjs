@@ -90,7 +90,7 @@ try {
         assert.equal((await api(`/orders/${orderId}/bump`, { method: 'POST', headers: HB })).status, 404);
   });
 
-  console.log(`api.test: ${pass} passed`);
+  await t('CARD-ON-FILE: save + charge saved card', async () => { const cust = await (await api('/customers', { method: 'POST', headers: H, body: JSON.stringify({ name: 'Tab', phone: '555-4242' }) })).json(); const saved = await (await api(`/customers/${cust.id}/card`, { method: 'POST', headers: H, body: JSON.stringify({ paymentMethodId: 'pm_mock_x', cardBrand: 'visa', cardLast4: '4242' }) })).json(); assert.equal(saved.cardLast4, '4242'); const charge = await (await api(`/customers/${cust.id}/charge`, { method: 'POST', headers: H, body: JSON.stringify({ amount: 25, reason: 'No-show fee' }) })).json(); assert.equal(charge.status, 'succeeded'); assert.equal(charge.total, 25); assert.equal(charge.method, 'card_on_file'); }); console.log(`api.test: ${pass} passed`);
 } finally {
     srv.kill();
     try { rmSync(dataDir, { recursive: true, force: true }); } catch {}
