@@ -25,3 +25,9 @@ export async function retrieveStatus(id) {
 export async function createRefund(id, amount) {
   return gw.refund(id, amount);
 }
+
+/** Card-on-file: charge a customer's previously saved card (tabs, no-show fees). */
+export async function chargeSavedCard(amount, savedRef, meta = {}) {
+    if (!gw.chargeSavedCard) { const e = new Error('saved-card charges not supported by this processor'); e.status = 400; throw e; }
+    return gw.chargeSavedCard(amount, savedRef, meta);
+}
