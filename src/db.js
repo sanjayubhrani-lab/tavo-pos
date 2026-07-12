@@ -5,7 +5,12 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_FILE = path.join(__dirname, '..', 'data', 'db.json');
+// DATA_DIR lets deployments (and tests) point the JSON store at a writable/
+// isolated location instead of the bundled ./data dir.
+const DB_FILE = process.env.DATA_DIR
+? path.join(process.env.DATA_DIR, 'db.json')
+  : path.join(__dirname, '..', 'data', 'db.json');
+if (process.env.DATA_DIR && !fs.existsSync(process.env.DATA_DIR)) fs.mkdirSync(process.env.DATA_DIR, { recursive: true });
 
 const DEFAULTS = {
   menu: [],        // {id, category, name, price, emoji, active}
