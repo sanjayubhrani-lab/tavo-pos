@@ -9,7 +9,7 @@ It includes order taking with modifiers, table/floor management, a live kitchen 
 ## What's inside
 
 ```
-platepoint/
+tavo-pos/
 ├─ package.json          # dependencies & run scripts
 ├─ .env.example          # copy to .env to configure
 ├─ src/
@@ -42,7 +42,7 @@ platepoint/
 You need **Node.js 18 or newer** installed (https://nodejs.org). Then, in a terminal:
 
 ```bash
-cd platepoint
+cd tavo-pos
 npm install          # 1. install dependencies
 cp .env.example .env # 2. create your config (Mac/Linux)  —  on Windows: copy .env.example .env
 npm run seed         # 3. load the starter menu, tables, staff
@@ -61,7 +61,7 @@ The JSON file store is fine for trying things out, but a real restaurant with se
 2. Put its connection string in `.env`:
 
 ```
-DATABASE_URL=postgres://user:password@localhost:5432/platepoint
+DATABASE_URL=postgres://user:password@localhost:5432/tavo-pos
 # DATABASE_SSL=true   # uncomment for most cloud-hosted databases
 ```
 
@@ -226,4 +226,9 @@ This is a solid foundation, not a finished launch. Already done: ✅ PIN login +
 
 ## License
 
-Your project — use it however you like.
+Tavo POS is dual-licensed:
+
+- **[AGPL-3.0](LICENSE)** — free for everyone, including commercial use in your own restaurant. If you modify Tavo and offer it to others as a service, the AGPL requires you to share those modifications.
+- **[Commercial license](COMMERCIAL-LICENSE.md)** — for companies that want to embed or resell Tavo without AGPL obligations. Get in touch.
+ 
+Running Tavo in your restaurant, self-hosting it, and modifying it for your own use never requires the commercial license.
