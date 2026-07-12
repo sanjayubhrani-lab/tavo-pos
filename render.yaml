@@ -3,7 +3,7 @@
 # Render provisions everything below and gives you an HTTPS URL automatically.
 services:
   - type: web
-    name: platepoint
+    name: tavo-pos
     runtime: node
     plan: free
     buildCommand: npm ci
