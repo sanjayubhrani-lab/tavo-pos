@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 import { nanoid } from 'nanoid';
 import { getStore, storeKind } from './store/index.js';
 import { buildSeedData } from './seedData.js';
-import { createPaymentIntent, retrieveStatus, createRefund, usingStripe, stripeClient, paymentGateway, publishableKey } from './payments.js';
+import { createPaymentIntent, retrieveStatus, createRefund, chargeSavedCard, usingStripe, stripeClient, paymentGateway, publishableKey } from './payments.js';
 import { verifyPin, hashPin, issueToken, requireAuth, requireRole, ROLE_ROUTES } from './auth.js';
 import { normalizeIncoming, exportMenu } from './integrations.js';
 import { answer as askTavo, suggestions as askSuggestions } from './ask.js';
@@ -1460,6 +1460,28 @@ app.post('/api/customers/:id/points', requireAuth, requireRole('manager'), h(asy
   const delta = Math.round(Number(req.body.delta) || 0);
   const points = Math.max(0, (c.points || 0) + delta);
   res.json(await store.updateCustomer(c.id, { points }));
+}));
+
+// ---- Card on File ----
+app.post('/api/customers/:id/card', requireAuth, h(async (req, res) => {
+    const c = await store.getCustomer(req.params.id);
+    if (!c || (c.tenantId || DEFAULT_TENANT) !== tid(req)) return res.status(404).json({ error: 'not found' });
+    const { stripeCustomerId = null, paymentMethodId = null, cardBrand = null, cardLast4 = null } = req.body;
+    if (!paymentMethodId && paymentGateway === 'stripe') return res.status(400).json({ error: 'paymentMethodId required' });
+    const updated = await store.updateCustomer(c.id, { savedCard: { stripeCustomerId, paymentMethodId, cardBrand, cardLast4, savedAt: Date.now() } });
+    res.json({ ok: true, cardBrand: updated.savedCard.cardBrand, cardLast4: updated.savedCard.cardLast4 });
+}));
+app.post('/api/customers/:id/charge', requireAuth, requireRole('manager'), h(async (req, res) => {
+    const c = await store.getCustomer(req.params.id);
+    if (!c || (c.tenantId || DEFAULT_TENANT) !== tid(req)) return res.status(404).json({ error: 'not found' });
+    if (!c.savedCard) return res.status(400).json({ error: 'no card on file for this customer' });
+    const amount = Number(req.body.amount);
+    if (!(amount > 0)) return res.status(400).json({ error: 'amount must be positive' });
+    const reason = String(req.body.reason || 'Card on file charge');
+    const charge = await chargeSavedCard(amount, { customerId: c.savedCard.stripeCustomerId, paymentMethodId: c.savedCard.paymentMethodId }, { customerId: c.id, reason });
+    const payment = { id: nanoid(10), customerId: c.id, total: round(amount), subtotal: round(amount), tax: 0, tip: 0, method: 'card_on_file', status: charge.status, stripeId: charge.id, confirmed: false, refundedAmount: 0, refundedAt: null, reason, lines: [], userId: req.user && req.user.id || null, tenantId: tid(req), createdAt: Date.now() };
+    await store.createPayment(payment);
+    res.status(201).json(payment);
 }));
 
 // ============================================================================

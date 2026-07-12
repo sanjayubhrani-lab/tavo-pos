@@ -10,6 +10,9 @@ export function makeMockGateway() {
       return { mode: 'mock', id: rid('pi_mock_'), clientSecret: null, status: 'succeeded' };
     },
     async retrieveStatus(/* id */) { return 'succeeded'; },
+        async chargeSavedCard(/* amount, savedRef, meta */) {
+                return { mode: 'mock', id: rid('pi_mock_cof_'), status: 'succeeded' };
+        },
     async refund(/* id, amount */) {
       return { mode: 'mock', id: rid('re_mock_'), status: 'succeeded' };
     },
