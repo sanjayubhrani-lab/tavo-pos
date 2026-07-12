@@ -6,6 +6,12 @@ import jwt from 'jsonwebtoken';
 const SECRET = process.env.JWT_SECRET || 'dev-only-change-me';
 const TOKEN_TTL = '12h';
 
+// SECURITY: never run in production with the public default secret — anyone
+// could forge a manager token. Fail fast at boot instead.
+if (process.env.NODE_ENV === 'production' && (!process.env.JWT_SECRET || SECRET === 'dev-only-change-me')) {
+  throw new Error('JWT_SECRET must be set to a strong secret in production. Refusing to start.');
+}
+
 // What each role is allowed to do (used by both API guards and the UI).
 export const ROLE_ROUTES = {
   manager: ['pos', 'floor', 'kds', 'online', 'qr', 'dash', 'analytics', 'menu', 'inventory', 'purchasing', 'stocktake', 'loyalty', 'discounts', 'crm', 'marketing', 'reservations', 'houseaccounts', 'locations', 'ask', 'drawer', 'clock', 'team', 'settings'],
