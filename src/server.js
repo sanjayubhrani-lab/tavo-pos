@@ -25,6 +25,7 @@ const LOYALTY_REDEEM = parseFloat(process.env.LOYALTY_REDEEM_RATE || '0.05'); //
 let store;
 // Small async wrapper so route handlers can throw and we still return JSON 500s.
 const h = fn => (req, res) => fn(req, res).catch(e => {
+  if (e && e.status) return res.status(e.status).json({ error: e.message });
   console.error(e); res.status(500).json({ error: e.message });
 });
 
@@ -128,6 +129,25 @@ function priceLines(lines) {
   subtotal = round(subtotal);
   const effRate = subtotal > 0 ? taxFull / subtotal : TAX_RATE;
   return { subtotal, tax: round(taxFull), total: round(subtotal + taxFull), effRate };
+}
+
+// SECURITY: never trust prices sent by the client. Rewrite every incoming line's
+// price from the authoritative stored menu (match by id, then by name). Unknown
+// items are rejected. Modifier surcharges are still parsed from mod text for now.
+async function repriceLines(lines, tenantId) {
+  const menu = await store.listMenu(tenantId);
+  const byId = new Map(menu.map(m => [String(m.id), m]));
+  const byName = new Map(menu.map(m => [String(m.name).toLowerCase(), m]));
+  const out = [];
+  for (const l of (lines || [])) {
+    const match = (l.menuItemId && byId.get(String(l.menuItemId)))
+      || (l.id && byId.get(String(l.id)))
+      || (l.name && byName.get(String(l.name).toLowerCase()));
+    if (!match) { const e = new Error(`unknown menu item: ${l.name ?? l.menuItemId ?? l.id ?? '?'}`); e.status = 400; throw e; }
+    out.push({ ...l, menuItemId: match.id, name: match.name, price: Number(match.price),
+      taxRate: (match.taxRate != null ? match.taxRate : l.taxRate) });
+  }
+  return out;
 }
 
 // Final settlement math: a check-level discount reduces the taxable subtotal
@@ -485,8 +505,9 @@ app.get('/api/orders', requireAuth, h(async (req, res) => {
 }));
 
 app.post('/api/orders', requireAuth, h(async (req, res) => {
-  const { lines = [], table = null } = req.body;
+  let { lines = [], table = null } = req.body;
   if (!lines.length) return res.status(400).json({ error: 'order has no items' });
+  lines = await repriceLines(lines, tid(req));   // SECURITY: server-side prices only
   const totals = priceLines(lines);
   const count = await store.countOrders(tid(req));
   const order = { id: nanoid(10), number: 1000 + count + 1, table, lines, ...totals, status: 'open', firedCourses: [], tenantId: tid(req), createdAt: Date.now() };
@@ -498,6 +519,7 @@ app.post('/api/orders', requireAuth, h(async (req, res) => {
 // send order to kitchen
 app.post('/api/orders/:id/fire', requireAuth, h(async (req, res) => {
   const before = await store.getOrder(req.params.id);
+  if (!before || (before.tenantId || DEFAULT_TENANT) !== tid(req)) return res.status(404).json({ error: 'not found' });
   const out = await store.updateOrder(req.params.id, { status: 'cooking', firedAt: Date.now() });
   if (!out) return res.status(404).json({ error: 'not found' });
   // Deplete stock only on the first fire (open → cooking), so re-fires don't double-count.
@@ -527,6 +549,8 @@ app.post('/api/orders/:id/fire-course', requireAuth, h(async (req, res) => {
 
 // bump (kitchen marks ready)
 app.post('/api/orders/:id/bump', requireAuth, h(async (req, res) => {
+  const cur = await store.getOrder(req.params.id);
+  if (!cur || (cur.tenantId || DEFAULT_TENANT) !== tid(req)) return res.status(404).json({ error: 'not found' });
   const out = await store.updateOrder(req.params.id, { status: 'ready' });
   out ? res.json(out) : res.status(404).json({ error: 'not found' });
 }));
@@ -534,7 +558,8 @@ app.post('/api/orders/:id/bump', requireAuth, h(async (req, res) => {
 // ---- payments ----
 // Step 1: create a payment intent for an order (or ad-hoc amount)
 app.post('/api/payments/intent', requireAuth, requireRole('manager', 'server'), h(async (req, res) => {
-  const { lines = [], tip = 0, orderId = null, table = null } = req.body;
+  let { lines = [], tip = 0, orderId = null, table = null } = req.body;
+  lines = await repriceLines(lines, tid(req));   // SECURITY: server-side prices only
   const totals = priceLines(lines);
   const grand = round(totals.total + Number(tip || 0));
   const intent = await createPaymentIntent(grand, { orderId: orderId || '', table: String(table || '') });
@@ -543,8 +568,9 @@ app.post('/api/payments/intent', requireAuth, requireRole('manager', 'server'), 
 
 // Step 2: record the completed payment + close the order/table
 app.post('/api/payments/complete', requireAuth, requireRole('manager', 'server'), h(async (req, res) => {
-  const { intentId, method = 'card', lines = [], tip = 0, orderId = null, table = null, customerId = null, pointsRedeemed = 0,
+  let { intentId, method = 'card', lines = [], tip = 0, orderId = null, table = null, customerId = null, pointsRedeemed = 0,
     discount = 0, discountReason = null, serviceCharge = 0, comp = false, taxExempt = false } = req.body;
+  lines = await repriceLines(lines, tid(req));   // SECURITY: server-side prices only
   // Comps (zeroing or near-zeroing a check) require a manager.
   const sub0 = priceLines(lines).subtotal;
   if ((comp || (Number(discount) || 0) >= sub0 - 1e-9) && (Number(discount) || 0) > 0 && req.user.role !== 'manager')
@@ -589,9 +615,10 @@ app.post('/api/payments/complete', requireAuth, requireRole('manager', 'server')
 // even split). The first tender carries the full lines + tax/discount breakdown
 // so item counts aren't double-counted; the rest carry only the tendered amount.
 app.post('/api/payments/split', requireAuth, requireRole('manager', 'server'), h(async (req, res) => {
-  const { lines = [], tip = 0, discount = 0, discountReason = null, serviceCharge = 0, comp = false, taxExempt = false,
+  let { lines = [], tip = 0, discount = 0, discountReason = null, serviceCharge = 0, comp = false, taxExempt = false,
     orderId = null, table = null, tenders = [], customerId = null, pointsRedeemed = 0 } = req.body;
   if (!Array.isArray(tenders) || tenders.length < 1) return res.status(400).json({ error: 'at least one tender required' });
+  lines = await repriceLines(lines, tid(req));   // SECURITY: server-side prices only
   const sub0 = priceLines(lines).subtotal;
   if ((comp || (Number(discount) || 0) >= sub0 - 1e-9) && (Number(discount) || 0) > 0 && req.user.role !== 'manager')
     return res.status(403).json({ error: 'comps require a manager' });
@@ -641,7 +668,9 @@ app.get('/api/payments', requireAuth, h(async (req, res) => res.json(await store
 // Refund a payment (full or partial). Manager only.
 app.post('/api/payments/:id/refund', requireAuth, requireRole('manager'), h(async (req, res) => {
   const pay = await store.getPayment(req.params.id);
-  if (!pay) return res.status(404).json({ error: 'payment not found' });
+  if (!pay || (pay.tenantId || DEFAULT_TENANT) !== tid(req)) return res.status(404).json({ error: 'payment not found' });
+  // SECURITY: only refund a payment that actually settled (guards mock/unconfirmed).
+  if (pay.status !== 'succeeded') return res.status(400).json({ error: 'only a succeeded payment can be refunded' });
   const already = pay.refundedAmount || 0;
   const refundable = round(pay.total - already);
   if (refundable <= 0) return res.status(400).json({ error: 'payment already fully refunded' });
@@ -660,7 +689,7 @@ app.post('/api/payments/:id/refund', requireAuth, requireRole('manager'), h(asyn
 // Void an order that hasn't been paid yet (cancel before settlement).
 app.post('/api/orders/:id/void', requireAuth, requireRole('manager', 'server'), h(async (req, res) => {
   const order = await store.getOrder(req.params.id);
-  if (!order) return res.status(404).json({ error: 'order not found' });
+  if (!order || (order.tenantId || DEFAULT_TENANT) !== tid(req)) return res.status(404).json({ error: 'order not found' });
   if (order.status === 'paid') return res.status(400).json({ error: 'paid orders must be refunded, not voided' });
   const out = await store.updateOrder(order.id, { status: 'voided', voidReason: req.body.reason || 'staff void' });
   if (order.table) await store.setTableStatus(order.table, 'open', null, tid(req));
